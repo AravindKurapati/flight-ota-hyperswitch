@@ -16,15 +16,34 @@ async function call<T>(path: string, body?: unknown, method = 'POST'): Promise<T
     body: body ? JSON.stringify(body) : undefined,
     cache: 'no-store',
   });
-  const json = await res.json().catch(() => ({}));
+
   if (!res.ok) {
+    // Hyperswitch always returns a JSON error body on failure, but a
+    // malformed one here is still an error either way: the HTTP status
+    // alone is enough to raise a typed HyperswitchError, and defaulting the
+    // body to {} cannot be mistaken for a real payment or refund.
+    const errorBody = await res.json().catch(() => ({}));
     throw new HyperswitchError(
       `Hyperswitch ${method} ${path} failed with ${res.status}`,
       res.status,
-      json,
+      errorBody,
     );
   }
-  return json as T;
+
+  // On the success path, a body that fails to parse must NOT default to {}.
+  // Callers key off `payment_id` / `status`; a silent {} cast to T is
+  // indistinguishable from a real (if empty) result and would swallow the
+  // failure. Surface it as a typed HyperswitchError instead.
+  const rawText = await res.text();
+  try {
+    return (rawText ? JSON.parse(rawText) : {}) as T;
+  } catch {
+    throw new HyperswitchError(
+      `Hyperswitch ${method} ${path} returned ${res.status} with a response body that could not be parsed as JSON`,
+      res.status,
+      rawText,
+    );
+  }
 }
 
 export async function createIntent(input: CreateIntentInput): Promise<HsPayment> {

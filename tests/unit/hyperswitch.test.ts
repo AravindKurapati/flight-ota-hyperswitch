@@ -20,7 +20,12 @@ describe('hyperswitch client', () => {
   });
 
   it('does not call fetch when the order_details sum check fails', async () => {
-    const fetchSpy = vi.spyOn(global, 'fetch');
+    // Armed with a rejection, not left to fall through to the real fetch:
+    // if the sum-check guard ever regresses, this test must fail loudly
+    // inside the process rather than attempt a live call to sandbox.hyperswitch.io.
+    const fetchSpy = vi
+      .spyOn(global, 'fetch')
+      .mockRejectedValue(new Error('unexpected fetch call'));
     const { createIntent } = await import('../../lib/hyperswitch');
     await expect(
       createIntent({
@@ -164,11 +169,16 @@ describe('hyperswitch client', () => {
     });
   });
 
-  it('surfaces a non-2xx response as a typed HyperswitchError carrying status and body', async () => {
+  it('surfaces a non-2xx transport/validation failure as a typed HyperswitchError carrying status and body', async () => {
+    // A non-2xx here is a transport or request-validation failure (bad
+    // request, auth failure, malformed payload) — NOT a card decline. A
+    // decline is a business outcome that Hyperswitch reports as HTTP 200
+    // with `status: 'failed'` and `error_code`/`error_message` set on the
+    // HsPayment body (see the parsing test above); it never throws.
     vi.spyOn(global, 'fetch').mockResolvedValue(
       new Response(
-        JSON.stringify({ error: { message: 'card declined', code: 'card_declined' } }),
-        { status: 402 },
+        JSON.stringify({ error: { message: 'amount must be a positive integer', code: 'invalid_request' } }),
+        { status: 400 },
       ),
     );
     const { createIntent, HyperswitchError } = await import('../../lib/hyperswitch');
@@ -188,9 +198,11 @@ describe('hyperswitch client', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(HyperswitchError);
       const hsErr = err as InstanceType<typeof HyperswitchError>;
-      expect(hsErr.status).toBe(402);
-      expect(hsErr.body).toEqual({ error: { message: 'card declined', code: 'card_declined' } });
-      expect(hsErr.message).toMatch(/402/);
+      expect(hsErr.status).toBe(400);
+      expect(hsErr.body).toEqual({
+        error: { message: 'amount must be a positive integer', code: 'invalid_request' },
+      });
+      expect(hsErr.message).toMatch(/400/);
     }
   });
 
@@ -213,6 +225,36 @@ describe('hyperswitch client', () => {
       const hsErr = err as InstanceType<typeof HyperswitchError>;
       expect(hsErr.status).toBe(500);
       expect(hsErr.body).toEqual({});
+    }
+  });
+
+  it('surfaces an unparsable body on a 2xx response as a typed failure, never as a silent empty object', async () => {
+    // A malformed body on a *successful* status code must not default to
+    // {} — that would produce an HsPayment with no payment_id and no
+    // status, indistinguishable from a real (if empty) result. It must be
+    // impossible for a caller to receive `{}` cast as HsPayment from a
+    // corrupted 200 response.
+    vi.spyOn(global, 'fetch').mockResolvedValue(new Response('not valid json', { status: 200 }));
+    const { createIntent, HyperswitchError } = await import('../../lib/hyperswitch');
+    const call = createIntent({
+      hsPaymentId: 'pay_' + '0'.repeat(26),
+      amountMinor: 50000,
+      captureMethod: 'manual',
+      customerId: 'cus_1',
+      description: 'x',
+      orderDetails: [{ product_name: 'Fare', quantity: 1, amount: 50000 }],
+      returnUrl: 'https://example.com',
+    });
+    await expect(call).rejects.toBeInstanceOf(HyperswitchError);
+    try {
+      await call;
+      expect.unreachable('createIntent should have thrown on an unparsable 2xx body');
+    } catch (err) {
+      expect(err).toBeInstanceOf(HyperswitchError);
+      const hsErr = err as InstanceType<typeof HyperswitchError>;
+      expect(hsErr.status).toBe(200);
+      expect(hsErr.body).toBe('not valid json');
+      expect(hsErr.message).toMatch(/could not be parsed/);
     }
   });
 
