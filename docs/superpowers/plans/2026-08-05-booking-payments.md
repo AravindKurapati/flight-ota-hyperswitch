@@ -1396,8 +1396,22 @@ git commit -m "feat: append-only event log and idempotency replay store"
 - Produces:
   - `ITINERARIES: Itinerary[]` and `findItinerary(id: string): Itinerary | undefined`
   - `type Itinerary = { id: string; origin: string; destination: string; carrier: string; flightNumber: string; departsAt: string; baseFareMinor: number }`
-  - `attemptIssuance(itineraryId: string): Promise<IssuanceResult>`
+  - `attemptIssuance(itineraryId: string, bookingId: string): Promise<IssuanceResult>`
   - `type IssuanceResult = { ok: true; ticketNumber: string } | { ok: false; kind: 'retryable' | 'terminal'; reason: string }`
+
+  **Post-review revision (2026-08-06):** the signature shown in Step 4 below and
+  used by Task 13 is `attemptIssuance(itineraryId, bookingId)`, not the
+  single-argument form the Step 1-6 narrative below was originally drafted with.
+  Retry state is keyed on the `(itineraryId, bookingId)` pair rather than
+  `itineraryId` alone, so the retryable-then-succeeds narrative for `itin_ord_lax`
+  replays independently for every booking instead of only working once per process.
+  `attemptIssuance` also now validates the itinerary id via `findItinerary` and
+  returns `{ ok: false, kind: 'terminal' }` for an unknown id, rather than the
+  original Step 4 code, which fabricated a ticket number for any id it didn't
+  recognize as one of the two failure fixtures. See
+  `.superpowers/sdd/2026-08-05-booking-payments/task-9-report.md` for the full
+  review trail; the Step 1-6 blocks below are left as originally drafted, defects
+  included, as the historical record of what was proposed.
 
 - [ ] **Step 1: Write `data/itineraries.ts`**
 
@@ -2221,7 +2235,7 @@ export async function issueTicket(
       await recordEvent(bookingId, 'ticketing.attempted', {}, tx);
     }
 
-    const issuance = await attemptIssuance(booking.itineraryId);
+    const issuance = await attemptIssuance(booking.itineraryId, bookingId);
 
     if (!issuance.ok && issuance.kind === 'retryable') {
       await recordEvent(bookingId, 'ticketing.failed', { kind: 'retryable', reason: issuance.reason }, tx);
