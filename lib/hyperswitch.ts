@@ -101,6 +101,7 @@ export function chargeOffSession(input: OffSessionInput): Promise<HsPayment> {
     confirm: true,
     off_session: true,
     capture_method: 'automatic',
+    authentication_type: 'no_three_ds',
     profile_id: env.HYPERSWITCH_PROFILE_ID,
     customer_id: input.customerId,
     description: input.description,

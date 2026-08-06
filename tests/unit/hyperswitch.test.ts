@@ -335,6 +335,7 @@ describe('hyperswitch client', () => {
       confirm: true,
       off_session: true,
       capture_method: 'automatic',
+      authentication_type: 'no_three_ds',
       customer_id: 'cus_1',
       description: 'Extra bag',
     });
