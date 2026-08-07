@@ -209,7 +209,7 @@ refund the correct answer to a duplicate is "already done", not a replay.
 **Why:** A capture that times out may or may not have moved funds. Retrying it is
 precisely how a double-capture happens. The same reasoning applies to refunds.
 
-### D-013 · `withIdempotency` never releases a key once `fn()` has succeeded · 2026-08-06
+### D-013 · `withIdempotency` releases a key only when `fn()` itself throws, and that is a contract on `fn`, not a proven invariant · 2026-08-06
 
 **Chose:** in `lib/idempotency.ts`, `fn()` runs inside its own try/catch. If `fn()`
 throws, the key is released so a retry can attempt `fn()` again. If `fn()` succeeds but
@@ -226,15 +226,46 @@ that observes a bookkeeping-failure error (or later finds the record stuck `in_f
 resolves it by reading state back — e.g. `GET /payments/{id}` — never by re-invoking
 `withIdempotency` with the assumption that the previous attempt didn't happen.
 
+**What this module actually guarantees, precisely — corrected 2026-08-06 after
+review:** an earlier version of this entry said a released key "only ever means `fn()`
+is known not to have produced a lasting side effect." That overstates it.
+`withIdempotency` guarantees exactly one thing: *the key is released if and only if
+`fn()` threw.* Whether a throw from `fn()` actually means nothing durable happened is
+a property of `fn`, not of this function — `withIdempotency` cannot see inside `fn()`
+and has no way to verify it.
+
+**This makes it a contract on every `fn` passed in, and Tasks 10+ must satisfy it**:
+if `fn` performs a remote mutation whose outcome can be ambiguous on failure — a
+Hyperswitch call that times out or returns an unparsable body after the payment may
+already have been created, exactly the scenario D-011 exists for — `fn` must resolve
+that ambiguity itself before throwing: read state back (`GET /payments/{id}`) and
+either return the real result normally, or throw only once it has confirmed nothing
+durable was created. A `fn` that throws on ambiguous failure without doing this
+reintroduces the double charge this module exists to prevent, just one layer up: the
+key is released (correctly, per this module's actual guarantee), the caller retries,
+and `fn` runs again against a payment that already exists. Documented prominently in
+`withIdempotency`'s JSDoc in `lib/idempotency.ts`, not only here, since whoever wires
+the first real Hyperswitch call into `fn` needs to see it at the call site.
+
+**Not built:** a caller-signalled "ambiguous, don't release" flag that would let `fn`
+report "I don't know what happened" as a third outcome distinct from success/throw,
+handled by leaving the key `in_flight` instead of requiring `fn` to resolve the
+ambiguity before returning control. Deferred rather than speculatively built — nothing
+currently needs it, and the contract above is sufficient as long as every `fn` honors
+it. If Task 10 (or later) finds the read-back-before-throw obligation awkward to
+satisfy inside a given `fn`, that is the moment to revisit this, not before.
+
 **Judgement call beyond the stated correction:** between `onConflictDoNothing()` and
 the follow-up `SELECT`, a concurrent request's failed attempt can delete the row first,
 so the `SELECT` finds nothing. Rather than throwing on the missing row, the claim loop
 treats this as "the key is free again" and retries the insert, bounded at 5 attempts
-before giving up loudly. This is safe because a deleted row only ever means `fn()` on
-that key is known *not* to have produced a lasting side effect (see the paragraph
-above) — there is nothing to double-run. Verified with a real-DB test that forces this
-exact race (`tests/integration/idempotency.test.ts`, "never releases the key when
-fn() succeeds but the bookkeeping update fails, so a retry does not re-run fn()").
+before giving up loudly (`IdempotencyClaimExhaustedError`). This is safe under the same
+contract described above: a deleted row means the concurrent `fn()` that held it
+threw, and per the contract every `fn` must guarantee a throw means nothing durable was
+created — so there is nothing to double-run by reclaiming the key. Verified with a
+real-DB test that forces this exact race (`tests/integration/idempotency.test.ts`,
+"never releases the key when fn() succeeds but the bookkeeping update fails, so a
+retry does not re-run fn()").
 
 ---
 
