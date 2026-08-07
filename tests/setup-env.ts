@@ -1,6 +1,13 @@
+// Load .env first (if present) so DATABASE_URL points at the real sandbox
+// database for integration tests. dotenv never overwrites a variable that
+// is already set, so this is a no-op in environments (e.g. CI) that inject
+// env vars directly.
+import 'dotenv/config';
+
 // Populates process.env with syntactically valid dummy values so that
 // lib/env.ts (which throws at import time) can be imported under Vitest
-// without a real .env file present.
+// without a real .env file present. Real values loaded above take
+// precedence via `??=`.
 process.env.HYPERSWITCH_API_KEY ??= 'snd_test_dummy_api_key';
 process.env.HYPERSWITCH_PUBLISHABLE_KEY ??= 'pk_snd_test_dummy_publishable_key';
 process.env.HYPERSWITCH_PROFILE_ID ??= 'pro_test_dummy_profile_id';
