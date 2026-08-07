@@ -267,6 +267,75 @@ real-DB test that forces this exact race (`tests/integration/idempotency.test.ts
 "never releases the key when fn() succeeds but the bookkeeping update fails, so a
 retry does not re-run fn()").
 
+### D-014 · A retry-created second Hyperswitch payment is an accepted residual risk, not fixed with deterministic id derivation · 2026-08-06
+
+**Chose:** accept that a retried `createBooking` can, in two narrow cases, create a
+second Hyperswitch payment for the same booking attempt; rely on `capture_method:
+manual` (D-002) to bound the consequence to a stray, uncaptured authorization that
+expires on its own, never a double charge.
+
+**The two cases, both inside `lib/bookings/create.ts`'s `fn`:**
+
+1. **Bookkeeping failure after a real create.** `createIntent` succeeds, then our own
+   `db.insert(payments)` fails. `fn()` throws, `withIdempotency` releases the key (by
+   design — see D-013), and a retry runs `fn()` again. `fn()` generates a fresh
+   `payments.id` (and therefore a fresh `hs_payment_id`) on every invocation, so the
+   retry creates a *second* Hyperswitch payment; the first is orphaned.
+2. **`createIntent` fails ambiguously and the read-back (task-10 correction 1) cannot
+   confirm either way.** `createIntentOrReadBack` in `lib/bookings/create.ts` reads
+   `getPayment(hsPaymentId)` back before rethrowing. If that read-back itself fails —
+   a second, independent transport failure — there is no way to tell whether the
+   original `createIntent` call actually landed. The current `fn()` must still resolve
+   to either a success or a throw; there is no third outcome. It rethrows the original
+   error, which releases the key exactly as in case 1, and a retry can again create a
+   second payment under a fresh `hs_payment_id`.
+
+**The blast radius is slightly wider than "a second payment," worth stating precisely
+rather than understating:** `bookingId`, like `paymentId`, is generated fresh inside
+`fn()` on every invocation. A retry does not reuse the first attempt's booking row — it
+inserts a brand-new one. So the first attempt's booking is left behind in `QUOTED`
+permanently, with **no payment row linked to it at all** (case 1: the insert that would
+have linked it is exactly what failed), while the stray Hyperswitch authorization it
+caused sits unlinked to any row in our database — findable only via the Hyperswitch
+dashboard, not our own ops console. This is clutter, not a money-safety issue: D-002
+still guarantees the authorization itself is never captured and expires. But it means
+the ops console will show an abandoned `QUOTED` booking with no explanation, and that is
+worth a demo-day note if one of these ever surfaces, rather than looking like a bug in
+the ops view.
+
+**Rejected:** deriving `hs_payment_id` deterministically from the idempotency key (so a
+retry reuses the same id and Hyperswitch's own idempotency, per D-010, dedupes it
+server-side).
+**Why:** Both cases are narrow — a bookkeeping `INSERT` failing immediately after a
+successful network call, or two independent transport failures on the same attempt —
+and, critically, **neither can produce a double charge**. Every flight authorization is
+`capture_method: manual` (D-002): an orphaned authorization is never captured, so it
+simply expires and drops off the traveller's card. The outcome is a stray hold, not
+lost money. Building deterministic id derivation to close a risk whose worst case is
+"an authorization we never charge, that expires on its own" is not proportionate to
+what it would cost: it would mean plumbing the idempotency key (not the database-issued
+ULID) through to `toHsPaymentId`, changing the 30-character derivation D-010 already
+verified, and re-deriving it identically on every retry path — for a failure mode that
+is already self-healing.
+
+**What would fix it in production:** derive `hs_payment_id` deterministically from the
+idempotency key rather than from a freshly generated `payments.id`, so a retry
+(whichever of the two cases triggered it) reuses the same `hs_payment_id` and
+Hyperswitch's server-side idempotency on `payment_id` (D-010) dedupes it — collapsing
+both cases to "the retry sees the same payment," the same guarantee create-intent
+already has on a clean double-submit.
+
+**Not built:** the tri-state "ambiguous, don't release" signal into `withIdempotency`
+that D-013 explicitly deferred pending a call site that found the throw-means-nothing-
+durable-happened obligation genuinely awkward. Case 2 above is that call site, and it
+was evaluated rather than silently worked around: extending `withIdempotency` to let
+`fn` say "I don't know, leave the key in_flight" would fully close case 2, but not case
+1 (a real success followed by a real, unrelated bookkeeping failure — there is nothing
+ambiguous about that one; `fn` succeeded and then something else broke). Since case 1
+requires accepting this residual risk regardless, and D-002 already bounds its
+consequence to a self-expiring hold, adding machinery to `withIdempotency` for case 2
+alone was judged not worth it — the same accepted-risk reasoning covers both.
+
 ---
 
 ## Verification
