@@ -1,6 +1,6 @@
 import {
   pgTable, pgEnum, text, bigint, jsonb, timestamp, char,
-  uniqueIndex, index, check, bigserial,
+  uniqueIndex, index, check,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -70,7 +70,10 @@ export const refunds = pgTable('refunds', {
 }));
 
 export const bookingEvents = pgTable('booking_events', {
-  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  // GENERATED ALWAYS AS IDENTITY, not bigserial: this is an append-only audit
+  // log, so a caller must not be able to supply its own id (bigserial is a
+  // plain bigint + nextval() default and silently allows that).
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
   bookingId: text('booking_id').notNull().references(() => bookings.id),
   type: text('type').notNull(),
   payload: jsonb('payload').notNull().default({}),

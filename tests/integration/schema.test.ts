@@ -1,16 +1,22 @@
 // Integration test against the real Neon sandbox database. Proves the
 // idempotency guards in SCHEMA.md are enforced by Postgres constraints, not
 // by application code (decision D-010): the double-charge guard on
-// payments (booking_id, kind), the hs_payment_id length check, and the
-// refund (payment_id, reason) guard.
+// payments (booking_id, kind), the hs_payment_id length check, the refund
+// (payment_id, reason) guard, and the updated_at triggers.
 //
-// Every row this file inserts is deleted in afterAll so repeat runs against
-// the shared database start clean, and the pool is closed so vitest exits
+// Skipped (visibly, not silently) when no real DATABASE_URL is configured —
+// e.g. a clean clone with no .env — so `npm test` stays hermetic. Every row
+// this file inserts is deleted in afterAll so repeat runs against the
+// shared database start clean, and the pool is closed so vitest exits
 // without an open-handle warning.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { db, bookings, payments, refunds } from '../../db';
 import { newId, toHsPaymentId } from '../../lib/ids';
+import { FALLBACK_DATABASE_URL } from '../setup-env';
+
+const hasRealDatabase =
+  !!process.env.DATABASE_URL && process.env.DATABASE_URL !== FALLBACK_DATABASE_URL;
 
 // Drizzle wraps the underlying driver error in a DrizzleQueryError whose
 // `.cause` is the raw Postgres error carrying `code` (SQLSTATE) and
@@ -29,7 +35,20 @@ function isPgError(err: unknown, code: string, constraint: string): boolean {
   return actualCode === code && actualConstraint === constraint;
 }
 
-describe('schema constraints', () => {
+// Awaits a query exactly once (Drizzle's QueryPromise re-executes the query
+// on every await — a second await would be a second live round-trip) and
+// asserts it rejected with the specific Postgres code/constraint that
+// should have fired.
+async function expectPgError(promise: Promise<unknown>, code: string, constraint: string) {
+  try {
+    await promise;
+    expect.fail(`expected query to reject with ${code}/${constraint}, but it succeeded`);
+  } catch (err) {
+    expect(isPgError(err, code, constraint)).toBe(true);
+  }
+}
+
+describe.skipIf(!hasRealDatabase)('schema constraints (requires a real DATABASE_URL)', () => {
   let bookingId: string;
   let flightPaymentId: string;
   const insertedPaymentIds: string[] = [];
@@ -66,13 +85,7 @@ describe('schema constraints', () => {
       id, bookingId, kind: 'flight', hsPaymentId: toHsPaymentId(id),
       amountMinor: 65400, captureMethod: 'manual', state: 'requires_capture',
     });
-
-    await expect(insertSecondFlight).rejects.toThrow();
-    try {
-      await insertSecondFlight;
-    } catch (err) {
-      expect(isPgError(err, '23505', 'payments_one_per_kind_idx')).toBe(true);
-    }
+    await expectPgError(insertSecondFlight, '23505', 'payments_one_per_kind_idx');
   });
 
   it('rejects an hs_payment_id that is not exactly 30 characters', async () => {
@@ -81,13 +94,7 @@ describe('schema constraints', () => {
       id, bookingId, kind: 'ancillary', hsPaymentId: 'too_short',
       amountMinor: 3500, captureMethod: 'automatic', state: 'succeeded',
     });
-
-    await expect(insertBadLength).rejects.toThrow();
-    try {
-      await insertBadLength;
-    } catch (err) {
-      expect(isPgError(err, '23514', 'hs_payment_id_is_30_chars')).toBe(true);
-    }
+    await expectPgError(insertBadLength, '23514', 'hs_payment_id_is_30_chars');
   });
 
   it('allows several ancillary payments for one booking', async () => {
@@ -116,12 +123,21 @@ describe('schema constraints', () => {
       id: secondRefundId, paymentId: flightPaymentId, amountMinor: 500,
       reason: 'customer_request', state: 'pending',
     });
+    await expectPgError(insertDuplicateReason, '23505', 'refunds_one_per_reason_idx');
+  });
 
-    await expect(insertDuplicateReason).rejects.toThrow();
-    try {
-      await insertDuplicateReason;
-    } catch (err) {
-      expect(isPgError(err, '23505', 'refunds_one_per_reason_idx')).toBe(true);
-    }
+  it('advances updated_at past created_at on UPDATE, via the DB trigger', async () => {
+    const [before] = await db.select().from(bookings).where(eq(bookings.id, bookingId));
+    expect(before.updatedAt.getTime()).toBe(before.createdAt.getTime());
+
+    // Cross a real clock tick so a trigger that merely no-ops would be caught.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await db.update(bookings)
+      .set({ voidDeadlineAt: new Date() })
+      .where(eq(bookings.id, bookingId));
+
+    const [after] = await db.select().from(bookings).where(eq(bookings.id, bookingId));
+    expect(after.updatedAt.getTime()).toBeGreaterThan(after.createdAt.getTime());
+    expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
   });
 });

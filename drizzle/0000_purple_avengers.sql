@@ -2,7 +2,7 @@ CREATE TYPE "public"."booking_state" AS ENUM('QUOTED', 'PAYMENT_FAILED', 'AUTHOR
 CREATE TYPE "public"."idempotency_status" AS ENUM('in_flight', 'complete');--> statement-breakpoint
 CREATE TYPE "public"."payment_kind" AS ENUM('flight', 'protection', 'ancillary');--> statement-breakpoint
 CREATE TABLE "booking_events" (
-	"id" bigserial PRIMARY KEY NOT NULL,
+	"id" bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY (sequence name "booking_events_id_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START WITH 1 CACHE 1),
 	"booking_id" text NOT NULL,
 	"type" text NOT NULL,
 	"payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
