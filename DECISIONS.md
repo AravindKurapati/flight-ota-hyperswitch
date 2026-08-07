@@ -209,6 +209,33 @@ refund the correct answer to a duplicate is "already done", not a replay.
 **Why:** A capture that times out may or may not have moved funds. Retrying it is
 precisely how a double-capture happens. The same reasoning applies to refunds.
 
+### D-013 · `withIdempotency` never releases a key once `fn()` has succeeded · 2026-08-06
+
+**Chose:** in `lib/idempotency.ts`, `fn()` runs inside its own try/catch. If `fn()`
+throws, the key is released so a retry can attempt `fn()` again. If `fn()` succeeds but
+the follow-up bookkeeping `UPDATE` (marking the record `complete` and storing the
+response) then fails, the key is left `in_flight` and the error propagates —
+**never** deleted or reset.
+**Rejected:** a single try/catch around both `fn()` and the bookkeeping update, which
+deletes the key in the catch regardless of which of the two failed.
+**Why:** If `fn()` created a real Hyperswitch payment and only the bookkeeping write
+then failed, deleting the key would make the next retry look identical to a fresh
+request: the retry would find no row, run `fn()` again, and create a second payment.
+That is the exact double charge this function exists to prevent. Per D-011, a caller
+that observes a bookkeeping-failure error (or later finds the record stuck `in_flight`)
+resolves it by reading state back — e.g. `GET /payments/{id}` — never by re-invoking
+`withIdempotency` with the assumption that the previous attempt didn't happen.
+
+**Judgement call beyond the stated correction:** between `onConflictDoNothing()` and
+the follow-up `SELECT`, a concurrent request's failed attempt can delete the row first,
+so the `SELECT` finds nothing. Rather than throwing on the missing row, the claim loop
+treats this as "the key is free again" and retries the insert, bounded at 5 attempts
+before giving up loudly. This is safe because a deleted row only ever means `fn()` on
+that key is known *not* to have produced a lasting side effect (see the paragraph
+above) — there is nothing to double-run. Verified with a real-DB test that forces this
+exact race (`tests/integration/idempotency.test.ts`, "never releases the key when
+fn() succeeds but the bookkeeping update fails, so a retry does not re-run fn()").
+
 ---
 
 ## Verification
