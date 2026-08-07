@@ -10,6 +10,11 @@ Newest first within each section. Dates are the date the decision was taken.
 
 ### D-001 · Stripe test-mode connector is in scope · 2026-08-05
 
+> **Superseded by D-012 on 2026-08-06.** The reasoning below still holds — the flow
+> needs a capture-capable PSP and the dummy connector is not one. Only the choice of
+> PSP changed, after Stripe turned out to be unusable. Kept rather than rewritten,
+> because the reason we moved is more informative than the destination.
+
 **Chose:** Stripe in test mode (`sk_test_`) as the primary connector.
 **Rejected:** dummy connectors only.
 **Why:** The dummy connector cannot capture, void, or store a payment method —
@@ -21,6 +26,56 @@ business details.
 This narrows the project rule from "no real PSP credentials" to **no *live* PSP
 credentials**. Test-mode keys are in scope. The Hyperswitch API key and `sk_test_` are
 server-side only and never reach the browser.
+
+### D-012 · Authorize.net replaces Stripe as the capture-capable connector · 2026-08-06
+
+**Chose:** Authorize.net sandbox as the connector for flight bookings.
+**Rejected:** Stripe test mode (D-001); waiting on Stripe's raw-card-data review;
+Braintree.
+**Why:** Stripe cannot process cards for this integration at all, for a structural
+reason rather than a configuration mistake.
+
+Hyperswitch is an orchestrator: the card reaches Hyperswitch's servers and Hyperswitch
+forwards it to the PSP. Its Stripe connector sends
+`payment_method_data[card][number]` — the raw PAN — to `v1/payment_intents`, and
+authenticates every request with `Bearer {secret_key}`
+(`crates/hyperswitch_connectors/src/connectors/stripe/transformers.rs:310`,
+`stripe.rs:157`). Stripe blocks raw card data on the secret-key path by default:
+
+> Sending credit card numbers directly to the Stripe API is generally unsafe.
+
+The dashboard's "Handle card information directly" toggle lifts it, but on a new
+account that toggle is gated behind full business activation — legal entity, tax
+details, an account representative's SSN, business owners, and a bank account. That is
+live-credential territory, which the project rules place on the deferred list, and it
+is not a reasonable thing to submit for a prototype.
+
+The adjacent toggle we *did* have — "enable card data collection with a publishable key"
+— does not help, because Hyperswitch never uses a Stripe publishable key. Verified from
+source before switching, not assumed.
+
+Authorize.net was chosen over Braintree because its connector has zero `NotImplemented`
+paths and its credentials are two fields (API Login ID, Transaction Key) against
+Braintree's GraphQL setup and three. Sandbox signup is instant with no KYC. Capability
+verified from source before committing to it:
+
+| Need | Authorize.net transaction type |
+| --- | --- |
+| Authorize without charging | `authOnlyTransaction` (from `capture_method: manual`) |
+| Capture after ticket issuance | `priorAuthCaptureTransaction` |
+| Void inside the DOT 24h window | `voidTransaction` |
+| Refund after ticketing | `refundTransaction` |
+
+**What this cost:** no application code. Connector choice is dashboard configuration and
+a routing rule; `lib/hyperswitch.ts` was untouched. That is the orchestration layer
+doing exactly what it exists to do, and it is the strongest evidence in this prototype
+that the abstraction is real rather than decorative.
+
+**Known limitation:** Hyperswitch rejects `manual_multiple` on Authorize.net, so
+repeated partial captures are unavailable. A single partial capture works and is
+verified. Our design captures once, so this does not bind.
+
+**Stripe is left connected but unused,** so the finding stays reproducible.
 
 ---
 
@@ -63,8 +118,8 @@ the traveller to rebook at a possibly higher fare. Retrying on a terminal failur
 
 ### D-005 · Trip protection routes to a second connector · 2026-08-05
 
-**Chose:** rule-based routing on amount — under $50 to `fauxpay`, everything else to
-Stripe.
+**Chose:** rule-based routing on amount — under $50 to `fauxpay`, everything else to the
+capture-capable connector (Stripe when written, Authorize.net since D-012).
 **Rejected:** routing on `capture_method`; a blind primary/fallback pair.
 **Why:** `capture_method` is not an available routing dimension (documented dimensions
 are payment method, payment method type, amount, currency, country, card type, card
@@ -77,7 +132,8 @@ real commercial arrangement.
 
 ### D-006 · The dummy connector is excluded from default fallback · 2026-08-05
 
-**Chose:** Default Fallback Routing lists Stripe only.
+**Chose:** Default Fallback Routing lists the capture-capable connector only —
+Authorize.net since D-012, Stripe when this was written. Never `fauxpay`.
 **Rejected:** the conventional "list every connector as fallback" configuration.
 **Why:** A fallback exists to catch a payment when the preferred processor cannot take
 it. If a flight authorization fell back onto `fauxpay` it would succeed and then be
@@ -152,6 +208,40 @@ refund the correct answer to a duplicate is "already done", not a replay.
 **Rejected:** optimistic retry with backoff.
 **Why:** A capture that times out may or may not have moved funds. Retrying it is
 precisely how a double-capture happens. The same reasoning applies to refunds.
+
+---
+
+## Verification
+
+What was confirmed against the live hosted sandbox, rather than assumed from docs.
+
+### V-001 · Manual capture, partial capture, void and decline · 2026-08-06
+
+Run: `npx tsx -r dotenv/config scripts/smoke.ts`. Connector: **`authorizedotnet`**.
+Profile `pro_LjnPawtO6EjxyUbjKCzA`.
+
+| Probe | Sent | Result |
+| --- | --- | --- |
+| Authorize, no charge | $654.00, `capture_method: manual`, `no_three_ds` | `requires_capture`, `amount_capturable: 65400` |
+| Partial capture | `amount_to_capture: 60000` | `partially_captured`, `amount_received: 60000` |
+| Void an authorization | `POST /payments/{id}/cancel` | `cancelled` |
+| Decline | billing zip `46282` | `failed`, `error_code: 2`, "This transaction has been declined." |
+| Routing, low amount | $29.00 | routed to `fauxpay`, `succeeded` |
+| Routing, flight amount | $654.00 | routed to `authorizedotnet` |
+
+This clears the assumption the whole architecture rests on: **the OTA can hold funds
+without charging, then capture only once a ticket exists, and release them at no cost if
+it does not.** D-002, D-003 and D-004 are all downstream of it. Had capture returned
+`NotImplemented`, the spec would have needed rewriting rather than implementing.
+
+Two notes for whoever runs this next:
+
+- The decline is triggered by **billing ZIP 46282**, per Authorize.net's testing guide.
+  Their amount-based triggers ($70.02 and similar) are marked deprecated — "may cease to
+  function without notice" — so they are not used here. The ZIP trigger also keeps the
+  fare realistic at $654 instead of $0.02, which matters when demoing.
+- Stripe decline cards do nothing on Authorize.net. `4000000000000002` authorizes
+  normally. A decline test that silently approves is worse than no decline test.
 
 ---
 
