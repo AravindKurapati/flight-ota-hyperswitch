@@ -10,6 +10,8 @@ export const bookingState = pgEnum('booking_state', [
 ]);
 
 export const paymentKind = pgEnum('payment_kind', ['flight', 'protection', 'ancillary']);
+export type PaymentKind = (typeof paymentKind.enumValues)[number];
+
 export const idempotencyStatus = pgEnum('idempotency_status', ['in_flight', 'complete']);
 
 export const bookings = pgTable('bookings', {
