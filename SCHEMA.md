@@ -152,6 +152,13 @@ Event types: `booking.created`, `payment.authorized`, `payment.declined`,
 `idempotent.replay` and `capability.violation` exist so the guards are observable rather
 than silent — a duplicate that is correctly swallowed should still leave a trace.
 
+`capability.violation` (emitted by the webhook handler, Task 12 / D-007) carries
+`{ connector, kind, reason, voided }`: `connector` and `kind` are the values
+`assertCapableOrThrow` was called with, `reason` is that call's thrown message (already
+names the missing capability), and `voided` records whether this delivery actually
+called `voidPayment` or found the row already in a terminal state and skipped it —
+which distinguishes a duplicate webhook delivery from the first one in the ops timeline.
+
 ---
 
 ## idempotency_records

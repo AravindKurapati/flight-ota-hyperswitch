@@ -399,6 +399,64 @@ documented.
 
 ---
 
+## Webhooks
+
+### D-017 · Webhook signature comparison is case-insensitive · 2026-08-08
+
+**Chose:** lowercase both the computed HMAC digest and the incoming
+`x-webhook-signature-512` header value before the length check and
+`timingSafeEqual` call in `verifySignature`.
+**Rejected:** the task-12 brief's original code, which compared
+`createHmac(...).digest('hex')` (always lowercase) directly against whatever case
+the header arrived in.
+**Why:** whether Hyperswitch sends this header in lowercase, uppercase, or mixed
+case is not verified this session — there is no live-reachable endpoint yet
+(`APP_BASE_URL` is still a placeholder) to observe a real delivery against, and Exa
+was unavailable to check the docs. A case mismatch would make `timingSafeEqual`
+correctly-but-uselessly reject a genuinely valid signature, 401 every webhook,
+and burn Hyperswitch's full 24h retry window for nothing. Lowercasing both sides
+costs nothing — hex-encoded output carries no case-derived entropy, so this does
+not weaken the security property at all — and removes the risk regardless of
+which case Hyperswitch turns out to use.
+
+### D-018 · Webhook payload's `connector` field is read defensively, undefined vs. null · 2026-08-08
+
+**Chose:** read `event.content.object.connector` and treat it as three distinct
+states — `undefined` (key absent from the payload) skips the capability check
+entirely for that event; a present `null` or a present connector string both run
+`assertCapableOrThrow`.
+**Rejected:** treating "field absent" the same as "connector is null" (would fire
+a false `capability.violation` on every single webhook if the field simply isn't
+present in the real payload); requiring the field be present as a precondition for
+processing the webhook at all (would silently stop advancing payment state the
+moment a real delivery turned out to omit it).
+**Why:** unverified this session, on two independent points, and both matter here.
+First, whether `content.object` — already assumed by the brief's own reference
+code for `payment_id` and `status` — is even the right wrapper. Second, whether a
+payment-event webhook body carries `connector` at all; `HsPayment`
+(`lib/hyperswitch.types.ts`, verified live in Task 6) confirms `connector: string
+| null` exists on the *plain payments API response* (`GET /payments/{id}`), which
+is suggestive but not proof the webhook body mirrors that shape field-for-field.
+Exa was offline and there is no live-reachable webhook endpoint yet to capture a
+real delivery against, so `event?.content?.object?.connector` is written
+defensively rather than asserted as fact. **This is the one piece of this task
+that must be re-checked once a real webhook is observed post-deployment** — if the
+field turns out to live elsewhere, or under a different key, the capability check
+in `app/api/webhooks/hyperswitch/route.ts` silently never fires (it only skips,
+it never throws on a wrong path), which would need to be caught by inspection of
+`booking_events` for the total absence of `capability.violation` rows, not by any
+test failure.
+
+Also decided in the same task: on a violation, `payments.connector` is written
+from the webhook's value even when it's the incapable connector that triggered
+the void — the row should say what actually happened, not omit the bad value. A
+later webhook that omits the `connector` key must never null out a value a
+previous webhook already set (a later webhook actively reporting a real, possibly
+different connector still overwrites it — connector is data from Hyperswitch, not
+something this app decides).
+
+---
+
 ## Verification
 
 What was confirmed against the live hosted sandbox, rather than assumed from docs.
