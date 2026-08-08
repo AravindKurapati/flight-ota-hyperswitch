@@ -8,6 +8,9 @@
     "doc": "docs"
   },
   "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit"
   },
@@ -16,6 +19,8 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@juspay-tech/hyper-js": "^2.1.0",
+    "@juspay-tech/react-hyper-js": "^2.3.0",
     "@neondatabase/serverless": "^1.1.0",
     "drizzle-orm": "^0.45.2",
     "next": "^16.3.0",

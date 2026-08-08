@@ -349,6 +349,54 @@ requires accepting this residual risk regardless, and D-002 already bounds its
 consequence to a self-expiring hold, adding machinery to `withIdempotency` for case 2
 alone was judged not worth it — the same accepted-risk reasoning covers both.
 
+### D-015 · `hyper.confirmPayment` takes only `{ confirmParams, redirect }` — no `elements`/`widgets` field · 2026-08-08
+
+**Chose:** call `useHyper().confirmPayment({ confirmParams: { return_url }, redirect: 'if_required' })`
+with no `elements` or `widgets` field, resolving the task-11 brief's flagged doc
+inconsistency (`useWidgets()` initialised but `{ elements, ... }` passed to
+`confirmPayment`).
+**Rejected:** passing `widgets` (the brief's suggested fallback) or `elements` (the
+official guide's literal text).
+**Why:** Two independent signals, then a live hand-test. `@juspay-tech/hyper-js`'s
+shipped `dist/index.d.ts` declares `confirmPaymentInputPayload` with exactly two
+optional fields, `confirmParams` and `redirect` — no `elements`, no `widgets`.
+Reading `@juspay-tech/react-hyper-js`'s compiled bundle directly (it ships no
+readable source) showed `useHyper().confirmPayment` is `HyperInstance.confirmPayment`
+passed straight through once the `hyper` promise resolves — nothing in the compiled
+code reads an `elements`/`widgets` field off the call. Hand-tested against the live
+sandbox (`itin_sfo_jfk`, `4242424242424242`): `{ confirmParams, redirect }` alone
+submitted the card mounted by `<UnifiedCheckout>` and produced `requires_capture` on
+`authorizedotnet`, confirmed both via the confirmation page's live `getPayment` read
+and a direct API check. `widgets` was never added — no unexplained failure occurred
+that would have justified escalating to it.
+
+### D-016 · ZIP-triggered decline (V-001) is not reachable from the browser checkout on this sandbox account · 2026-08-08
+
+**Chose:** ship `UnifiedCheckout` with no billing-collecting `options`, matching what
+this account's live `required_fields` schema actually asks for. Flow B's decline-then-
+retry code in `CheckoutForm.tsx` is written and structurally correct, but its trigger
+(billing ZIP 46282) could not be exercised through the browser in this session.
+**Rejected:** guessing an `options` shape to force billing collection, or silently
+smoothing over the gap by not mentioning it.
+**Why:** `GET /account/payment_methods?client_secret=...` — the same endpoint
+`UnifiedCheckout` itself queries to decide what to render — was called directly
+against a live intent on this profile. Its `required_fields` for `card`/`credit` list
+only `card_number`, `card_exp_month`, `card_exp_year`, `card_cvc`. No billing/AVS
+field is present, so the widget has no reason to render one, and no `options` value
+can be expected to override a schema the SDK reads from the server. Two candidate
+workarounds were tried and both failed empirically, not by assumption: a Stripe-shaped
+`options={{ fields: { billingDetails: {...} } }}` on `UnifiedCheckout` produced no
+change in the rendered form, and passing an undeclared `billing` field inside
+`confirmParams` (mirroring what `scripts/smoke.ts` sends on the raw `POST /payments`
+call) was silently dropped — the resulting payment's `billing` field read back as
+`null` from the live API both with and without it.
+**What would fix it:** a business-profile / Control Center setting that marks billing
+address as a required field for card payments on this profile (analogous to Task 2's
+dashboard-only routing config) — a manual prerequisite, not something this task's
+client code can control. Recorded rather than guessed at, per the project's
+verify-before-building rule; Exa was unavailable to check whether such a setting is
+documented.
+
 ---
 
 ## Verification
@@ -398,6 +446,22 @@ unverified assumption — exactly the kind of guess the project rules forbid ("I
 cannot verify an endpoint or field, say so instead of guessing"). It is now a
 confirmed fact rather than an assumption: a traveller who hits this path gets the
 correct client secret and can complete checkout normally, not a stale or missing one.
+
+### V-003 · Checkout end-to-end (flow A) and the double-click guard, verified live and in-browser · 2026-08-08
+
+Run via `npm run dev` against `sandbox.hyperswitch.io`, booking `itin_sfo_jfk`
+($352.50) through the actual UI (browser-automated), not a script.
+
+| Probe | Sent | Result |
+| --- | --- | --- |
+| Book + pay | `4242424242424242`, exp `12/30`, CVC `123` | Redirected to `/confirmation/{bookingId}`; confirmation page's live `getPayment` read showed `status: requires_capture`, `connector: authorizedotnet`. Confirmed independently via a direct API check: `amount_capturable: 35250`, `payment_checks.avs_result_code: "Y"` with `billing: null` — see D-016 for what that null implies. |
+| Double-click | Two rapid clicks on "Pay and hold my seat" against the same mounted card, second click landing while `disabled={submitting}` was already true | Only one `handleSubmit` ran (button showed `Processing…`, second click was a no-op on a disabled control). Confirmed at the source of truth: `GET /payments/{id}` on the resulting payment reports `attempt_count: 1` — Hyperswitch itself saw exactly one confirm attempt. |
+
+`GET /account/payment_methods?client_secret=...` (called directly, live) confirms
+this account's `required_fields` for card payments do not include a billing/AVS
+field — see D-016. The ZIP-46282 decline path (flow B) could not be exercised
+through the browser in this session as a result; flow A and the double-click guard
+were both fully exercised and hold.
 
 ---
 
