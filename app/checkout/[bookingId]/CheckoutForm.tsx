@@ -55,44 +55,59 @@ export function CheckoutForm({ bookingId }: { bookingId: string }) {
     // traveller never sees a second request fired at all. `hyper` itself is
     // never null/undefined here — useHyper()'s context always provides an
     // object (verified in the compiled bundle: the default context value
-    // has real, if stub, methods) — so `submitting` is the only guard that
-    // does anything.
+    // has real, if stub, methods) — but that claim was never independently
+    // reproduced the way D-016's `required_fields` finding was, and neither
+    // hand-tested path exercised a click before `HyperElements` had
+    // resolved. The try/catch below is what actually protects against that
+    // edge case (and any other `confirmPayment` failure) regardless of
+    // whether the stub-methods claim holds, so no separate null-check is
+    // needed on top of it (review finding, task-11).
     if (submitting) return;
     setSubmitting(true);
     setMessage(null);
 
-    const result = await hyper.confirmPayment({
-      confirmParams: {
-        return_url: `${window.location.origin}/confirmation/${bookingId}`,
-      },
-      redirect: 'if_required',
-    });
+    try {
+      const result = await hyper.confirmPayment({
+        confirmParams: {
+          return_url: `${window.location.origin}/confirmation/${bookingId}`,
+        },
+        redirect: 'if_required',
+      });
 
-    // `result` is a union: `ConfirmPaymentErrorResponse` (client-side
-    // failure before any request reached Hyperswitch — malformed card
-    // input) has an `error` field and no `status`. A real server round trip
-    // comes back as a full `ConfirmPaymentResponse` with `status` and, on a
-    // connector decline, populated `error_message`/`error_code`. Both
-    // branches are handled; only the `error`-absent, `status: succeeded`
-    // path (the success case) was hand-verified this session — the decline
-    // branch is written to the documented response shape, not observed
-    // live. See D-016 in DECISIONS.md and the CheckoutForm module comment.
-    if ('error' in result) {
-      setMessage(result.error.message || 'Please check your card details and try again.');
+      // `result` is a union: `ConfirmPaymentErrorResponse` (client-side
+      // failure before any request reached Hyperswitch — malformed card
+      // input) has an `error` field and no `status`. A real server round
+      // trip comes back as a full `ConfirmPaymentResponse` with `status`
+      // and, on a connector decline, populated `error_message`/
+      // `error_code`. Both branches are handled; only the `error`-absent,
+      // `status: succeeded` path (the success case) was hand-verified this
+      // session — the decline branch is written to the documented response
+      // shape, not observed live. See D-016 in DECISIONS.md and the
+      // CheckoutForm module comment.
+      if ('error' in result) {
+        setMessage(result.error.message || 'Please check your card details and try again.');
+        setSubmitting(false);
+        return;
+      }
+
+      if (result.status !== 'succeeded' && result.status !== 'requires_capture') {
+        // A decline lands here. The PaymentIntent stays reusable, so the
+        // traveller can enter another card against the same intent and
+        // Hyperswitch records it as attempt #2.
+        setMessage(result.error_message || 'That card was declined. Please try another card.');
+        setSubmitting(false);
+        return;
+      }
+
+      window.location.href = `/confirmation/${bookingId}`;
+    } catch {
+      // A thrown/rejected confirmPayment — e.g. clicked before the SDK
+      // finished loading, or a transport failure. Without this, `submitting`
+      // would stay true forever: the button would be stuck on "Processing…"
+      // with no way to recover short of a reload (review finding, task-11).
+      setMessage('Something went wrong submitting your payment. Please try again.');
       setSubmitting(false);
-      return;
     }
-
-    if (result.status !== 'succeeded' && result.status !== 'requires_capture') {
-      // A decline lands here. The PaymentIntent stays reusable, so the
-      // traveller can enter another card against the same intent and
-      // Hyperswitch records it as attempt #2.
-      setMessage(result.error_message || 'That card was declined. Please try another card.');
-      setSubmitting(false);
-      return;
-    }
-
-    window.location.href = `/confirmation/${bookingId}`;
   }
 
   return (
