@@ -455,6 +455,33 @@ previous webhook already set (a later webhook actively reporting a real, possibl
 different connector still overwrites it — connector is data from Hyperswitch, not
 something this app decides).
 
+### D-019 · `voidPayment` failures inside the capability-violation branch are caught, not left to crash the handler · 2026-08-08
+
+**Chose:** wrap the `voidPayment` call inside the webhook handler's capability-violation
+branch in its own `try/catch`. On failure, still record the `capability.violation` event
+(`voided: false`, plus a `voidError` field carrying the failure message) and still
+return 200, rather than letting the exception propagate out of `POST`.
+**Rejected:** the original task-12 implementation, which called `voidPayment` unguarded
+inside that branch — a network failure, 5xx, or timeout on that one call would surface
+as an unhandled rejection instead of a controlled response.
+**Why:** caught in review. This branch exists specifically to catch a flight or
+ancillary payment stranded on a connector with no capture/void path — the highest-risk
+case in the handler, by design. Letting the one Hyperswitch call inside that branch
+crash the request meant the branch could lose its own audit trail at exactly the moment
+it matters most, which defeats the reason `capability.violation` exists at all (SCHEMA.md:150-153:
+"a duplicate that is correctly swallowed should still leave a trace" — a call that
+fails must leave one too). Mirrors the resolve-ambiguity-into-a-durable-record pattern
+already established in `lib/idempotency.ts` rather than introducing a new failure mode.
+
+Same review pass also moved `capability.violation`'s missing-capability data off
+`reason` (a free-text string with no stability contract) onto a structured field:
+`assertCapableOrThrow` now throws a typed `ConnectorCapabilityError`
+(`lib/connector-capabilities.ts`) carrying `readonly missing: (keyof Capability)[]`,
+and the webhook handler reads that property directly for the event payload's `missing`
+field instead of only interpolating it into the message text. `REQUIREMENTS` itself
+stays private to `connector-capabilities.ts` — only the already-computed result is
+exposed, not the table that produced it.
+
 ---
 
 ## Verification

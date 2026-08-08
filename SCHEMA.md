@@ -153,11 +153,16 @@ Event types: `booking.created`, `payment.authorized`, `payment.declined`,
 than silent — a duplicate that is correctly swallowed should still leave a trace.
 
 `capability.violation` (emitted by the webhook handler, Task 12 / D-007) carries
-`{ connector, kind, reason, voided }`: `connector` and `kind` are the values
-`assertCapableOrThrow` was called with, `reason` is that call's thrown message (already
-names the missing capability), and `voided` records whether this delivery actually
-called `voidPayment` or found the row already in a terminal state and skipped it —
-which distinguishes a duplicate webhook delivery from the first one in the ops timeline.
+`{ connector, kind, reason, missing, voided, voidError? }`: `connector` and `kind` are
+the values `assertCapableOrThrow` was called with, `reason` is that call's thrown
+message (human-readable), `missing` is the structured `(keyof Capability)[]` read off
+`ConnectorCapabilityError.missing` (not parsed back out of `reason`, which carries no
+stability contract), `voided` records whether this delivery actually called
+`voidPayment` successfully, and `voidError` (present only when a void was attempted and
+failed — network error, 5xx, timeout) carries that failure's message. `voided: false`
+therefore has two distinct causes, both readable from the same row: the payment was
+already in a terminal state (a duplicate delivery, `voidError` absent), or a void was
+attempted and the Hyperswitch call itself failed (`voidError` present).
 
 ---
 

@@ -96,6 +96,28 @@ export function capabilitiesFor(connector: string | null): Capability {
 }
 
 /**
+ * Thrown by {@link assertCapableOrThrow}. `missing` is a structured, stable list of
+ * the capability keys the connector lacks — callers that need to record *what* was
+ * missing (e.g. the webhook handler's `capability.violation` event, task 12) should
+ * read this property rather than parsing it back out of `message`, which carries no
+ * stability contract.
+ */
+export class ConnectorCapabilityError extends Error {
+  constructor(
+    readonly connector: string | null,
+    readonly kind: PaymentKind,
+    readonly missing: (keyof Capability)[],
+  ) {
+    super(
+      `Connector "${connector ?? 'null'}" cannot support a "${kind}" payment: ` +
+        `missing ${missing.join(', ')}. Void immediately rather than stranding funds ` +
+        `on a connector with no path to release them.`,
+    );
+    this.name = 'ConnectorCapabilityError';
+  }
+}
+
+/**
  * Throws unless `connector` supports everything `kind` will need over the life of the
  * payment. Callers use this right after authorization to decide whether to proceed or
  * void immediately (D-007) — by the time capture or void is actually attempted and
@@ -105,10 +127,6 @@ export function assertCapableOrThrow(connector: string | null, kind: PaymentKind
   const caps = capabilitiesFor(connector);
   const missing = REQUIREMENTS[kind].filter((capability) => !caps[capability]);
   if (missing.length > 0) {
-    throw new Error(
-      `Connector "${connector ?? 'null'}" cannot support a "${kind}" payment: ` +
-        `missing ${missing.join(', ')}. Void immediately rather than stranding funds ` +
-        `on a connector with no path to release them.`,
-    );
+    throw new ConnectorCapabilityError(connector, kind, missing);
   }
 }

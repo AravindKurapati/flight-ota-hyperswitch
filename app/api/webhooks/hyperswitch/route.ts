@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db, payments } from '../../../../db';
 import { verifySignature } from '../../../../lib/webhooks';
 import { recordEvent } from '../../../../lib/events';
-import { assertCapableOrThrow } from '../../../../lib/connector-capabilities';
+import { assertCapableOrThrow, ConnectorCapabilityError } from '../../../../lib/connector-capabilities';
 import { voidPayment } from '../../../../lib/hyperswitch';
 
 /** Statuses ordered by progress. A webhook never moves a payment backwards. */
@@ -82,16 +82,41 @@ export async function POST(req: NextRequest) {
       // which the terminal-state check below prevents double-doing) and
       // record it durably. Still return 200: Hyperswitch cannot fix this by
       // retrying delivery, and we now have a queryable record instead.
+      //
+      // `assertCapableOrThrow` only ever throws `ConnectorCapabilityError`,
+      // but this is read defensively rather than assumed -- an unexpected
+      // throw here still must not crash the handler or skip the audit
+      // record, which is the entire point of this branch existing.
+      const capErr = err instanceof ConnectorCapabilityError ? err : null;
       const reason = err instanceof Error ? err.message : String(err);
+      const missing = capErr?.missing ?? [];
       let voided = false;
+      let voidError: string | undefined;
 
       if (!alreadyTerminal(row.state)) {
-        const result = await voidPayment(hsPaymentId, 'connector_capability_violation');
-        await db
-          .update(payments)
-          .set({ connector, state: result.status, updatedAt: new Date() })
-          .where(eq(payments.id, row.id));
-        voided = true;
+        // The Hyperswitch call itself can fail (network, 5xx, timeout) --
+        // that must not propagate out of the handler as an unhandled
+        // rejection. A crash here would mean the ONE branch that exists to
+        // catch a real, dangerous misrouting loses its audit trail entirely,
+        // which is the opposite of what "always ack 200" is for.
+        try {
+          const result = await voidPayment(hsPaymentId, 'connector_capability_violation');
+          await db
+            .update(payments)
+            .set({ connector, state: result.status, updatedAt: new Date() })
+            .where(eq(payments.id, row.id));
+          voided = true;
+        } catch (voidErr) {
+          voidError = voidErr instanceof Error ? voidErr.message : String(voidErr);
+          if (connector !== row.connector) {
+            // The void didn't happen, but the connector value is still
+            // worth persisting truthfully (Correction 4).
+            await db
+              .update(payments)
+              .set({ connector, updatedAt: new Date() })
+              .where(eq(payments.id, row.id));
+          }
+        }
       } else if (connector !== row.connector) {
         // Nothing to void, but the connector value is still worth
         // persisting truthfully (Correction 4).
@@ -102,7 +127,8 @@ export async function POST(req: NextRequest) {
       }
 
       await recordEvent(row.bookingId, 'capability.violation', {
-        connector, kind: row.kind, reason, voided,
+        connector, kind: row.kind, reason, missing, voided,
+        ...(voidError ? { voidError } : {}),
       });
       await recordEvent(row.bookingId, 'webhook.received', {
         hsPaymentId, status, eventId: event?.event_id ?? null,

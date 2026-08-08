@@ -216,6 +216,9 @@ describe.skipIf(!hasRealDatabase)('POST /api/webhooks/hyperswitch (requires a re
     const violation = events.find((e) => e.type === 'capability.violation');
     expect(violation).toBeDefined();
     expect(violation?.payload).toMatchObject({ connector: null, kind: 'flight', voided: true });
+    expect((violation?.payload as { missing: string[] }).missing).toEqual(
+      expect.arrayContaining(['capture', 'void']),
+    );
   });
 
   it('correction 1: a flight payment reported on an incapable connector is voided and recorded, still 200', async () => {
@@ -243,6 +246,48 @@ describe.skipIf(!hasRealDatabase)('POST /api/webhooks/hyperswitch (requires a re
     expect(violation).toBeDefined();
     expect(violation?.payload).toMatchObject({ connector: 'fauxpay', kind: 'flight', voided: true });
     expect((violation?.payload as { reason: string }).reason).toContain('capture');
+    expect((violation?.payload as { missing: string[] }).missing).toEqual(
+      expect.arrayContaining(['capture', 'void']),
+    );
+    expect(events.some((e) => e.type === 'webhook.received')).toBe(true);
+  });
+
+  it('review fix 1: a voidPayment failure still records the violation event (voided: false, voidError set) and still returns 200', async () => {
+    const { POST } = await import('../../app/api/webhooks/hyperswitch/route');
+    const { voidPayment } = await import('../../lib/hyperswitch');
+    vi.mocked(voidPayment).mockRejectedValueOnce(new Error('simulated network failure calling Hyperswitch'));
+
+    const bookingId = await makeBooking();
+    const { hsPaymentId, id } = await makePayment(bookingId, {
+      kind: 'flight', state: 'requires_confirmation', connector: null,
+    });
+
+    const body = payload(hsPaymentId, 'requires_capture', 'fauxpay');
+    const res = await POST(webhookRequest(body, sign(body)));
+
+    // The void call blew up, but the handler must not crash or surface an
+    // unhandled rejection -- it still acks the delivery.
+    expect(res.status).toBe(200);
+    const bodyJson = await res.json();
+    expect(bodyJson).toEqual({ ok: true });
+
+    expect(voidPayment).toHaveBeenCalledTimes(1);
+
+    // No successful void result exists to read a new state from, so the
+    // payment row's state is left exactly as it was.
+    const [row] = await db.select().from(payments).where(eq(payments.id, id));
+    expect(row.state).toBe('requires_confirmation');
+    // The connector value is still worth persisting truthfully even though
+    // the void itself failed.
+    expect(row.connector).toBe('fauxpay');
+
+    const events = await db.select().from(bookingEvents).where(eq(bookingEvents.bookingId, bookingId));
+    const violation = events.find((e) => e.type === 'capability.violation');
+    expect(violation).toBeDefined();
+    expect(violation?.payload).toMatchObject({
+      connector: 'fauxpay', kind: 'flight', voided: false,
+      voidError: 'simulated network failure calling Hyperswitch',
+    });
     expect(events.some((e) => e.type === 'webhook.received')).toBe(true);
   });
 
@@ -274,6 +319,27 @@ describe.skipIf(!hasRealDatabase)('POST /api/webhooks/hyperswitch (requires a re
     const violations = events.filter((e) => e.type === 'capability.violation');
     expect(violations).toHaveLength(2); // both deliveries are still recorded...
     expect(violations[1].payload).toMatchObject({ voided: false }); // ...but only the first actually voided
+  });
+
+  it('review fix 3: a previously-set real connector survives a later webhook that omits the field', async () => {
+    // The scenario correction 4 actually exists to prevent: NOT a row that
+    // starts null and stays null (that was the original, weaker test below),
+    // but a row that already holds a real, working connector value and must
+    // not have it silently nulled out by a later delivery that simply
+    // doesn't carry the field.
+    const { POST } = await import('../../app/api/webhooks/hyperswitch/route');
+    const bookingId = await makeBooking();
+    const { hsPaymentId, id } = await makePayment(bookingId, {
+      kind: 'flight', state: 'requires_capture', connector: 'authorizedotnet',
+    });
+
+    const body = payload(hsPaymentId, 'succeeded'); // no `connector` key at all
+    const res = await POST(webhookRequest(body, sign(body)));
+    expect(res.status).toBe(200);
+
+    const [row] = await db.select().from(payments).where(eq(payments.id, id));
+    expect(row.state).toBe('succeeded'); // normal advance still happened
+    expect(row.connector).toBe('authorizedotnet'); // NOT nulled out
   });
 
   it('acknowledges an unknown payment_id with 200 and writes nothing', async () => {
