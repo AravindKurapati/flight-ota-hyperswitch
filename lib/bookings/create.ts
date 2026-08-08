@@ -42,7 +42,18 @@ async function createIntentOrReadBack(input: CreateIntentInput): Promise<HsPayme
   try {
     return await createIntent(input);
   } catch (err) {
-    const readBack = await getPayment(input.hsPaymentId).catch(() => undefined);
+    const readBack = await getPayment(input.hsPaymentId).catch((readBackErr) => {
+      // Distinguish, in the log, the two ways this can end up empty-handed:
+      // a confirmed "no such payment" vs. the read-back itself breaking
+      // (D-014's read-back-also-fails sub-case, where the original error is
+      // rethrown below without knowing which of the two happened). No
+      // stored diagnostic otherwise separates them.
+      console.error(
+        `createIntentOrReadBack: read-back for ${input.hsPaymentId} failed after createIntent failed`,
+        readBackErr,
+      );
+      return undefined;
+    });
     if (readBack) return readBack;
     throw err;
   }

@@ -290,6 +290,19 @@ expires on its own, never a double charge.
    error, which releases the key exactly as in case 1, and a retry can again create a
    second payment under a fresh `hs_payment_id`.
 
+**Case 2's bound is the same as case 1's, and strictly better in the common case.**
+Each `createBooking` attempt calls `createIntentOrReadBack` — and therefore
+`createIntent` — exactly once. So a single retry adds *at most one* additional
+orphaned authorization, the identical worst-case bound as case 1's "one bookkeeping
+failure, one extra payment." It is not worse merely because two independent failures
+were involved instead of one. And unlike case 1, case 2's worst case is not the
+typical case: most of the time the read-back's own failure means `createIntent`'s
+underlying request never landed either (the same network path just broke twice), so
+the common outcome is zero orphaned authorizations, not one. Repeated retries against
+a persistently broken read-back path would still add at most one orphan per attempt,
+not one that compounds within a single attempt — there is no loop inside `fn()` that
+could multiply it.
+
 **The blast radius is slightly wider than "a second payment," worth stating precisely
 rather than understating:** `bookingId`, like `paymentId`, is generated fresh inside
 `fn()` on every invocation. A retry does not reuse the first attempt's booking row — it
@@ -369,6 +382,22 @@ Two notes for whoever runs this next:
   fare realistic at $654 instead of $0.02, which matters when demoing.
 - Stripe decline cards do nothing on Authorize.net. `4000000000000002` authorizes
   normally. A decline test that silently approves is worse than no decline test.
+
+### V-002 · `GET /payments/{id}` returns the same `client_secret` post-create, for an unconfirmed payment · 2026-08-08
+
+Verified against the live sandbox: created an unconfirmed payment (`confirm: false`,
+the state every flight intent is in immediately after `createIntent`), then
+`GET /payments/{id}` on it. **The `client_secret` in the read-back response is
+identical to the one returned by the original create.**
+
+This is what makes the read-back path in `createIntentOrReadBack`
+(`lib/bookings/create.ts`, task-10 correction 1) safe to return directly: on an
+ambiguous `createIntent` failure, the function returns whatever `getPayment`
+reports, including `intent.client_secret!`. Before this check, that `!` was an
+unverified assumption — exactly the kind of guess the project rules forbid ("If you
+cannot verify an endpoint or field, say so instead of guessing"). It is now a
+confirmed fact rather than an assumption: a traveller who hits this path gets the
+correct client secret and can complete checkout normally, not a stale or missing one.
 
 ---
 
