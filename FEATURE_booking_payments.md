@@ -184,15 +184,27 @@ which presents as a routing bug.
 
 | Connector | Mode | Role | Capture | Void | MIT | Webhooks |
 | --- | --- | --- | --- | --- | --- | --- |
-| `stripe` | test (`sk_test_`) | Flight bookings | yes | yes | yes | yes |
+| `authorizedotnet` | sandbox | Flight bookings | yes | yes | yes¹ | yes¹ |
 | `fauxpay` | dummy | Trip protection | **no** | **no** | **no** | **no** |
+| `stripe` | test (`sk_test_`) | not used — see D-012 | yes² | yes² | yes² | yes² |
+
+¹ Capture and void are verified live against the sandbox (V-001, `DECISIONS.md`). MIT
+and webhooks are established from connector source only — credible, but no MIT payment
+or webhook has actually been exercised yet.
+
+² Stripe's capability is what it can do in principle, not what we can reach. D-012
+found Hyperswitch's Stripe connector sends the raw PAN on the secret-key path, which
+Stripe blocks by default; lifting the block needs full business activation, which the
+project rules place on the deferred list. This is a credentialing problem, not a
+capability one — Stripe stays connected but unused so the finding stays reproducible.
 
 The dummy connector's limits are verified from source
 (`crates/hyperswitch_connectors/src/connectors/dummyconnector.rs`): capture returns
 `NotImplemented`, void is an empty impl, `SetupMandate` is explicitly unimplemented,
 webhooks return `WebhooksNotImplemented`, and `manual_multiple` / `scheduled` capture
 are rejected in `validate_connector_against_payment_request`. Dummy payments also
-expire after two days.
+expire after two days. `fauxpay`, `phonypay` and `pretendpay` are all instances of this
+same dummy connector.
 
 ### Routing
 
@@ -201,8 +213,8 @@ payment method, payment method type, amount, currency, country, card type and ca
 network. The rule therefore keys on amount:
 
 ```
-Rule 1:  amount < $50.00   →  fauxpay      (trip protection)
-Default Fallback           →  stripe        (everything else)
+Rule 1:  amount < $50.00   →  fauxpay            (trip protection)
+Default Fallback           →  authorizedotnet     (everything else)
 ```
 
 `fauxpay` is deliberately **excluded from Default Fallback**, so no flight

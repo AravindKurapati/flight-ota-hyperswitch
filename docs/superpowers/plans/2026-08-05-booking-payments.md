@@ -41,7 +41,14 @@ lib/state-machine.ts                  pure booking transition table
 lib/events.ts                         booking_events append-only writer
 lib/idempotency.ts                    response replay store
 lib/ticketing.ts                      simulated GDS
-lib/bookings.ts                       domain, sole writer to bookings
+lib/bookings/index.ts                 re-exports; the only import site for consumers
+lib/bookings/shared.ts                PNR generator, DOT window constant, common queries
+lib/bookings/create.ts                createBooking            (Task 10)
+lib/bookings/issue.ts                 issueTicket              (Task 13)
+lib/bookings/cancel.ts                cancelWithinWindow       (Task 14)
+lib/bookings/refund.ts                refundBooking            (Task 15)
+lib/bookings/protection.ts            addTripProtection        (Task 17)
+lib/bookings/ancillary.ts             chargeAncillary          (Task 18)
 lib/webhooks.ts                       HMAC-SHA512 verification
 data/itineraries.ts                   hardcoded fixtures
 app/page.tsx                          itinerary list
@@ -59,7 +66,13 @@ tests/unit/*.test.ts
 tests/integration/*.test.ts
 ```
 
-Split by responsibility, not layer. `lib/hyperswitch.ts` is the only file that knows the wire format; `lib/bookings.ts` is the only file that writes booking state. If either grows past ~250 lines during implementation, that is the signal it has absorbed a responsibility that belongs elsewhere.
+Split by responsibility, not layer. `lib/hyperswitch.ts` is the only file that knows the wire format; the `lib/bookings/` package is the only writer of booking state.
+
+**`lib/bookings/` is a directory, one file per operation.** Six tasks add booking operations, and a single file would land past 400 lines — more than any one subagent needs in context, and six tasks all editing the same file. `index.ts` re-exports every operation, so consumers and tests import from `../../lib/bookings` exactly as if it were still one module. Each operation file owns one exported function; anything two of them need lives in `shared.ts`.
+
+If any single file grows past ~250 lines during implementation, that is the signal it has absorbed a responsibility that belongs elsewhere.
+
+**Import paths inside `lib/bookings/`.** Code blocks in Tasks 13–18 are written as though they sit in `lib/`, one level up from where they actually land. When placing them, adjust: sibling `lib` modules become `../hyperswitch`, `../ids`, `../events`; the database becomes `../../db`; fixtures become `../../data/itineraries`; and the shared helpers (`pnr`, `DOT_VOID_WINDOW_MS`, `flightPaymentFor`, `Passenger`) come from `./shared`. Where a task's code selects the flight payment inline, use `flightPaymentFor()` instead of repeating the query.
 
 ---
 
@@ -126,7 +139,7 @@ APP_BASE_URL=https://your-app.vercel.app
 
 ```typescript
 // tests/unit/env.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 describe('env', () => {
   it('throws when a required variable is missing', async () => {
@@ -790,6 +803,7 @@ npx drizzle-kit migrate
 ```typescript
 // tests/integration/schema.test.ts
 import { describe, it, expect, beforeAll } from 'vitest';
+import { and, eq } from 'drizzle-orm';
 import { db, bookings, payments } from '../../db';
 import { newId, toHsPaymentId } from '../../lib/ids';
 
@@ -834,7 +848,9 @@ describe('schema constraints', () => {
         amountMinor: 3500, captureMethod: 'automatic', state: 'succeeded',
       });
     }
-    expect(true).toBe(true); // reaching here without throwing is the assertion
+    const ancillaries = await db.select().from(payments)
+      .where(and(eq(payments.bookingId, bookingId), eq(payments.kind, 'ancillary')));
+    expect(ancillaries).toHaveLength(2);
   });
 });
 ```
@@ -1380,8 +1396,22 @@ git commit -m "feat: append-only event log and idempotency replay store"
 - Produces:
   - `ITINERARIES: Itinerary[]` and `findItinerary(id: string): Itinerary | undefined`
   - `type Itinerary = { id: string; origin: string; destination: string; carrier: string; flightNumber: string; departsAt: string; baseFareMinor: number }`
-  - `attemptIssuance(itineraryId: string): Promise<IssuanceResult>`
+  - `attemptIssuance(itineraryId: string, bookingId: string): Promise<IssuanceResult>`
   - `type IssuanceResult = { ok: true; ticketNumber: string } | { ok: false; kind: 'retryable' | 'terminal'; reason: string }`
+
+  **Post-review revision (2026-08-06):** the signature shown in Step 4 below and
+  used by Task 13 is `attemptIssuance(itineraryId, bookingId)`, not the
+  single-argument form the Step 1-6 narrative below was originally drafted with.
+  Retry state is keyed on the `(itineraryId, bookingId)` pair rather than
+  `itineraryId` alone, so the retryable-then-succeeds narrative for `itin_ord_lax`
+  replays independently for every booking instead of only working once per process.
+  `attemptIssuance` also now validates the itinerary id via `findItinerary` and
+  returns `{ ok: false, kind: 'terminal' }` for an unknown id, rather than the
+  original Step 4 code, which fabricated a ticket number for any id it didn't
+  recognize as one of the two failure fixtures. See
+  `.superpowers/sdd/2026-08-05-booking-payments/task-9-report.md` for the full
+  review trail; the Step 1-6 blocks below are left as originally drafted, defects
+  included, as the historical record of what was proposed.
 
 - [ ] **Step 1: Write `data/itineraries.ts`**
 
@@ -1525,7 +1555,7 @@ git commit -m "feat: itinerary fixtures and deterministic simulated GDS"
 ### Task 10: Booking creation — flow A, with the double-submit guard
 
 **Files:**
-- Create: `lib/bookings.ts`, `app/api/bookings/route.ts`
+- Create: `lib/bookings/shared.ts`, `lib/bookings/create.ts`, `lib/bookings/index.ts`, `app/api/bookings/route.ts`
 - Test: `tests/integration/create-booking.test.ts`
 
 **Interfaces:**
@@ -1618,28 +1648,58 @@ describe('createBooking', () => {
 Run: `npx vitest run tests/integration/create-booking.test.ts`
 Expected: FAIL — `lib/bookings` does not exist.
 
-- [ ] **Step 3: Implement `lib/bookings.ts`**
+- [ ] **Step 3: Implement `lib/bookings/shared.ts`, `lib/bookings/create.ts` and `lib/bookings/index.ts`**
+
+First `lib/bookings/shared.ts` — everything more than one operation needs:
 
 ```typescript
 import 'server-only';
-import { db, bookings, payments } from '../db';
-import { newId, toHsPaymentId } from './ids';
-import { fareBreakdown } from './money';
-import { findItinerary } from '../data/itineraries';
-import { createIntent } from './hyperswitch';
-import { withIdempotency } from './idempotency';
-import { recordEvent } from './events';
-import { env } from './env';
+import { and, eq } from 'drizzle-orm';
+import { db, payments } from '../../db';
 
 export type Passenger = { firstName: string; lastName: string };
 
-const DOT_VOID_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const DOT_VOID_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-function pnr(): string {
+/** Ambiguous characters (I, O) omitted — PNRs get read aloud over the phone. */
+export function pnr(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
   return Array.from({ length: 6 }, () =>
     alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
 }
+
+/** Every operation that touches money needs the booking's flight payment. */
+export async function flightPaymentFor(bookingId: string, tx: typeof db = db) {
+  const [row] = await tx.select().from(payments)
+    .where(and(eq(payments.bookingId, bookingId), eq(payments.kind, 'flight')));
+  if (!row) throw new Error(`No flight payment for booking ${bookingId}`);
+  return row;
+}
+```
+
+Then `lib/bookings/index.ts`, which is the only import site consumers use:
+
+```typescript
+export * from './shared';
+export * from './create';
+// Later tasks append one export line each: issue, cancel, refund,
+// protection, ancillary. Tests and routes import from '../../lib/bookings'
+// and never from an operation file directly.
+```
+
+Then `lib/bookings/create.ts`:
+
+```typescript
+import 'server-only';
+import { db, bookings, payments } from '../../db';
+import { newId, toHsPaymentId } from '../ids';
+import { fareBreakdown } from '../money';
+import { findItinerary } from '../../data/itineraries';
+import { createIntent } from '../hyperswitch';
+import { withIdempotency } from '../idempotency';
+import { recordEvent } from '../events';
+import { env } from '../env';
+import { type Passenger, DOT_VOID_WINDOW_MS, pnr } from './shared';
 
 export async function createBooking(input: {
   itineraryId: string;
@@ -1758,7 +1818,7 @@ Expected: PASS — in particular `createIntent` called exactly once across a con
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lib/bookings.ts app/api/bookings/route.ts tests/integration/create-booking.test.ts
+git add lib/bookings/ app/api/bookings/route.ts tests/integration/create-booking.test.ts
 git commit -m "feat: booking creation with concurrent double-submit protection"
 ```
 
@@ -2020,12 +2080,18 @@ export async function POST(req: NextRequest) {
       .where(eq(payments.id, row.id));
   }
 
-  await recordEvent(row.bookingId, 'webhook.received', { hsPaymentId, status });
+  await recordEvent(row.bookingId, 'webhook.received', {
+    hsPaymentId, status, eventId: event?.event_id ?? null,
+  });
   return NextResponse.json({ ok: true });
 }
 ```
 
-Always returns 200 for unknown payments. A non-200 makes Hyperswitch retry a webhook we will never care about.
+Always returns 200 for unknown payments. Hyperswitch retries delivery for up to **24 hours** when it does not receive a 2XX, so a non-200 buys a day of pointless retries for a webhook we will never care about.
+
+The header name and algorithm are verified against the docs: HMAC-SHA512 over the raw JSON body, keyed with the business profile's `payments_response_hash_key`, delivered as `x-webhook-signature-512`. An `x-webhook-signature-256` variant exists for systems without SHA512; we do not use it.
+
+The payload also carries an `event_id`, which Hyperswitch's own guidance names as the duplicate-detection key. The monotonic rank check below already makes replays harmless, so `event_id` is not required for correctness here — but log it in the `webhook.received` event so duplicate deliveries are visible in the ops timeline rather than invisible.
 
 - [ ] **Step 5: Run and confirm pass**
 
@@ -2049,7 +2115,7 @@ git commit -m "feat: HMAC-verified webhook handler with monotonic state advance"
 
 **Files:**
 - Create: `app/api/bookings/[id]/issue/route.ts`
-- Modify: `lib/bookings.ts` (add `issueTicket`)
+- Create: `lib/bookings/issue.ts`; Modify: `lib/bookings/index.ts` (re-export `issueTicket`)
 - Test: `tests/integration/issue.test.ts`
 
 **Interfaces:**
@@ -2131,7 +2197,7 @@ describe('issueTicket', () => {
 Run: `npx vitest run tests/integration/issue.test.ts`
 Expected: FAIL — `issueTicket` is not exported.
 
-- [ ] **Step 3: Add `issueTicket` to `lib/bookings.ts`**
+- [ ] **Step 3: Create `lib/bookings/issue.ts` and re-export it from `index.ts`**
 
 ```typescript
 import { eq, and } from 'drizzle-orm';
@@ -2169,7 +2235,7 @@ export async function issueTicket(
       await recordEvent(bookingId, 'ticketing.attempted', {}, tx);
     }
 
-    const issuance = await attemptIssuance(booking.itineraryId);
+    const issuance = await attemptIssuance(booking.itineraryId, bookingId);
 
     if (!issuance.ok && issuance.kind === 'retryable') {
       await recordEvent(bookingId, 'ticketing.failed', { kind: 'retryable', reason: issuance.reason }, tx);
@@ -2222,7 +2288,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lib/bookings.ts app/api/bookings/ tests/integration/issue.test.ts
+git add lib/bookings/ app/api/bookings/ tests/integration/issue.test.ts
 git commit -m "feat: ticket issuance capturing only after a ticket number exists"
 ```
 
@@ -2232,7 +2298,7 @@ git commit -m "feat: ticket issuance capturing only after a ticket number exists
 
 **Files:**
 - Create: `app/api/bookings/[id]/cancel/route.ts`
-- Modify: `lib/bookings.ts` (add `cancelWithinWindow`)
+- Create: `lib/bookings/cancel.ts`; Modify: `lib/bookings/index.ts` (re-export `cancelWithinWindow`)
 - Test: `tests/integration/cancel.test.ts`
 
 **Interfaces:**
@@ -2290,7 +2356,7 @@ describe('cancelWithinWindow', () => {
 Run: `npx vitest run tests/integration/cancel.test.ts`
 Expected: FAIL
 
-- [ ] **Step 3: Add `cancelWithinWindow` to `lib/bookings.ts`**
+- [ ] **Step 3: Create `lib/bookings/cancel.ts` and re-export it from `index.ts`**
 
 ```typescript
 export async function cancelWithinWindow(
@@ -2329,7 +2395,20 @@ export async function cancelWithinWindow(
 }
 ```
 
-- [ ] **Step 4: Implement the route** — identical shape to Task 13's route, calling `cancelWithinWindow(params.id)`.
+- [ ] **Step 4: Implement `app/api/bookings/[id]/cancel/route.ts`**
+
+```typescript
+import { NextRequest, NextResponse } from 'next/server';
+import { cancelWithinWindow } from '../../../../../lib/bookings';
+
+export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    return NextResponse.json(await cancelWithinWindow(params.id));
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+  }
+}
+```
 
 - [ ] **Step 5: Run and confirm pass**
 
@@ -2339,7 +2418,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lib/bookings.ts app/api/bookings/ tests/integration/cancel.test.ts
+git add lib/bookings/ app/api/bookings/ tests/integration/cancel.test.ts
 git commit -m "feat: DOT 24-hour cancellation as a void with server-side deadline"
 ```
 
@@ -2349,7 +2428,7 @@ git commit -m "feat: DOT 24-hour cancellation as a void with server-side deadlin
 
 **Files:**
 - Create: `app/api/bookings/[id]/refund/route.ts`
-- Modify: `lib/bookings.ts` (add `refundBooking`)
+- Create: `lib/bookings/refund.ts`; Modify: `lib/bookings/index.ts` (re-export `refundBooking`)
 - Test: `tests/integration/refund.test.ts`
 
 **Interfaces:**
@@ -2419,7 +2498,7 @@ describe('refundBooking', () => {
 Run: `npx vitest run tests/integration/refund.test.ts`
 Expected: FAIL
 
-- [ ] **Step 3: Add `refundBooking` to `lib/bookings.ts`**
+- [ ] **Step 3: Create `lib/bookings/refund.ts` and re-export it from `index.ts`**
 
 ```typescript
 import { refunds } from '../db';
@@ -2496,7 +2575,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lib/bookings.ts app/api/bookings/ tests/integration/refund.test.ts
+git add lib/bookings/ app/api/bookings/ tests/integration/refund.test.ts
 git commit -m "feat: partial and full refunds guarded by a pre-call unique constraint"
 ```
 
@@ -2567,7 +2646,7 @@ git commit -m "feat: operations console with stored vs live payment state"
 
 **Files:**
 - Create: `app/api/bookings/[id]/protection/route.ts`
-- Modify: `lib/bookings.ts` (add `addTripProtection`), `app/checkout/[bookingId]/CheckoutForm.tsx` (add the opt-in)
+- Create: `lib/bookings/protection.ts`; Modify: `lib/bookings/index.ts` (re-export `addTripProtection`), `app/checkout/[bookingId]/CheckoutForm.tsx` (add the opt-in)
 - Test: `tests/integration/protection.test.ts`
 
 **Interfaces:**
@@ -2620,7 +2699,7 @@ describe('trip protection', () => {
 Run: `npx vitest run tests/integration/protection.test.ts`
 Expected: FAIL
 
-- [ ] **Step 3: Add `addTripProtection` to `lib/bookings.ts`**
+- [ ] **Step 3: Create `lib/bookings/protection.ts` and re-export it from `index.ts`**
 
 ```typescript
 const TRIP_PROTECTION_MINOR = 2400;   // $24.00 — below the $50 routing threshold
@@ -2671,7 +2750,7 @@ Book with protection and confirm in the Control Center that the $24.00 payment s
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lib/bookings.ts app/ tests/integration/protection.test.ts
+git add lib/bookings/ app/ tests/integration/protection.test.ts
 git commit -m "feat: trip protection routed to the dummy connector by rule"
 ```
 
@@ -2681,7 +2760,7 @@ git commit -m "feat: trip protection routed to the dummy connector by rule"
 
 **Files:**
 - Create: `app/api/bookings/[id]/ancillary/route.ts`
-- Modify: `lib/bookings.ts` (add `chargeAncillary`)
+- Create: `lib/bookings/ancillary.ts`; Modify: `lib/bookings/index.ts` (re-export `chargeAncillary`)
 - Test: `tests/integration/ancillary.test.ts`
 
 **Interfaces:**
@@ -2766,7 +2845,7 @@ describe('chargeAncillary', () => {
 Run: `npx vitest run tests/integration/ancillary.test.ts`
 Expected: FAIL
 
-- [ ] **Step 3: Add `chargeAncillary` to `lib/bookings.ts`**
+- [ ] **Step 3: Create `lib/bookings/ancillary.ts` and re-export it from `index.ts`**
 
 ```typescript
 import { chargeOffSession } from './hyperswitch';
@@ -2835,7 +2914,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lib/bookings.ts app/ tests/integration/ancillary.test.ts
+git add lib/bookings/ app/ tests/integration/ancillary.test.ts
 git commit -m "feat: off-session ancillary charge using the stored payment method"
 ```
 

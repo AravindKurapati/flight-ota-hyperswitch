@@ -146,11 +146,29 @@ CREATE INDEX booking_events_booking_id_idx ON booking_events (booking_id, create
 
 Event types: `booking.created`, `payment.authorized`, `payment.declined`,
 `payment.retried`, `ticketing.attempted`, `ticketing.succeeded`, `ticketing.failed`,
-`payment.captured`, `payment.voided`, `refund.created`, `webhook.received`,
-`idempotent.replay`, `capability.violation`.
+`payment.captured`, `payment.voided`, `payment.void_failed`, `refund.created`,
+`protection.added`, `webhook.received`, `idempotent.replay`, `capability.violation`.
+
+`payment.void_failed` records a void attempt whose Hyperswitch call failed. It is
+written after the surrounding transaction has rolled back (the failure aborts the
+transaction, so a record written inside it would vanish — and a pool-connection
+write while the transaction still held the booking row `FOR UPDATE` would
+self-deadlock on the FK's KEY SHARE lock).
 
 `idempotent.replay` and `capability.violation` exist so the guards are observable rather
 than silent — a duplicate that is correctly swallowed should still leave a trace.
+
+`capability.violation` (emitted by the webhook handler, Task 12 / D-007) carries
+`{ connector, kind, reason, missing, voided, voidError? }`: `connector` and `kind` are
+the values `assertCapableOrThrow` was called with, `reason` is that call's thrown
+message (human-readable), `missing` is the structured `(keyof Capability)[]` read off
+`ConnectorCapabilityError.missing` (not parsed back out of `reason`, which carries no
+stability contract), `voided` records whether this delivery actually called
+`voidPayment` successfully, and `voidError` (present only when a void was attempted and
+failed — network error, 5xx, timeout) carries that failure's message. `voided: false`
+therefore has two distinct causes, both readable from the same row: the payment was
+already in a terminal state (a duplicate delivery, `voidError` absent), or a void was
+attempted and the Hyperswitch call itself failed (`voidError` present).
 
 ---
 
