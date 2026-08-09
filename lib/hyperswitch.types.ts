@@ -35,6 +35,14 @@ export type CreateIntentInput = {
   returnUrl: string;
 };
 
+export type DummyAutoChargeInput = {
+  hsPaymentId: string;
+  amountMinor: number;
+  customerId: string;
+  description: string;
+  orderDetails: OrderDetail[];
+};
+
 export type OffSessionInput = {
   hsPaymentId: string;
   amountMinor: number;

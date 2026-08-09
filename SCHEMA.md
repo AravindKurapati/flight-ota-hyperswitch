@@ -147,7 +147,7 @@ CREATE INDEX booking_events_booking_id_idx ON booking_events (booking_id, create
 Event types: `booking.created`, `payment.authorized`, `payment.declined`,
 `payment.retried`, `ticketing.attempted`, `ticketing.succeeded`, `ticketing.failed`,
 `payment.captured`, `payment.voided`, `payment.void_failed`, `refund.created`,
-`webhook.received`, `idempotent.replay`, `capability.violation`.
+`protection.added`, `webhook.received`, `idempotent.replay`, `capability.violation`.
 
 `payment.void_failed` records a void attempt whose Hyperswitch call failed. It is
 written after the surrounding transaction has rolled back (the failure aborts the

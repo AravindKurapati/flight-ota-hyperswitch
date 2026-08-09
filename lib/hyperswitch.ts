@@ -1,7 +1,7 @@
 import 'server-only';
 import { env } from './env';
 import {
-  type HsPayment, type HsRefund, type CreateIntentInput,
+  type HsPayment, type HsRefund, type CreateIntentInput, type DummyAutoChargeInput,
   type OffSessionInput, type RefundInput, HyperswitchError,
 } from './hyperswitch.types';
 
@@ -91,6 +91,45 @@ export function refund(input: RefundInput): Promise<HsRefund> {
     amount: input.amountMinor,
     reason: input.reason,
     ...(input.refundId ? { refund_id: input.refundId } : {}),
+  });
+}
+
+/**
+ * Creates AND immediately confirms a payment using a fixed Hyperswitch test
+ * card, server-side, with no browser SDK involved.
+ *
+ * ONLY for the trip-protection flow (D-022), which is deliberately routed to
+ * `fauxpay` (the dummy connector) by the `amount < $50` rule (D-005). Never
+ * use this for the flight leg or any payment that could route to a real
+ * connector — sending raw card data server-side to a real PSP is exactly
+ * what got Stripe removed from this project (D-012). This function is safe
+ * only because `fauxpay` is synthetic: no real card data ever exists (the
+ * "card number" is Hyperswitch's own published test value), and this exact
+ * server-side-confirm pattern is already proven in `scripts/smoke.ts`.
+ */
+export function createAndConfirmDummyCharge(input: DummyAutoChargeInput): Promise<HsPayment> {
+  return call<HsPayment>('/payments', {
+    payment_id: input.hsPaymentId,
+    amount: input.amountMinor,
+    currency: 'USD',
+    confirm: true,
+    capture_method: 'automatic',
+    authentication_type: 'no_three_ds',
+    profile_id: env.HYPERSWITCH_PROFILE_ID,
+    customer_id: input.customerId,
+    description: input.description,
+    order_details: input.orderDetails,
+    payment_method: 'card',
+    payment_method_type: 'credit',
+    payment_method_data: {
+      card: {
+        card_number: '4242424242424242',
+        card_exp_month: '12',
+        card_exp_year: '2030',
+        card_cvc: '123',
+        card_holder_name: 'Trip Protection',
+      },
+    },
   });
 }
 

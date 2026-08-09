@@ -45,6 +45,12 @@ export function CheckoutForm({ bookingId }: { bookingId: string }) {
   const hyper = useHyper();
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [wantsProtection, setWantsProtection] = useState(false);
+  // Set once the protection charge succeeds so a retried submit (e.g. after
+  // a card decline on the flight leg) never attempts a second $24 charge —
+  // the server's (booking_id, kind) unique index would reject it anyway,
+  // but the traveller shouldn't see that as an error.
+  const [protectionAdded, setProtectionAdded] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -65,6 +71,31 @@ export function CheckoutForm({ bookingId }: { bookingId: string }) {
     if (submitting) return;
     setSubmitting(true);
     setMessage(null);
+
+    // Trip protection first (Task 17, D-022): it's an independent payment,
+    // and charging it before the flight confirm means a protection failure
+    // can't strand an already-confirmed flight payment behind it. On
+    // failure: show the error, untick the box, and stop — the traveller
+    // retries the flight payment without it. A failed $24 add-on must never
+    // block the flight purchase.
+    if (wantsProtection && !protectionAdded) {
+      try {
+        const res = await fetch(`/api/bookings/${bookingId}/protection`, { method: 'POST' });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(typeof body.error === 'string' ? body.error : `HTTP ${res.status}`);
+        }
+        setProtectionAdded(true);
+      } catch (err) {
+        setWantsProtection(false);
+        setMessage(
+          `Trip protection could not be added (${err instanceof Error ? err.message : 'unknown error'}). ` +
+          'Your card has not been charged for the flight — press Pay again to continue without protection.',
+        );
+        setSubmitting(false);
+        return;
+      }
+    }
 
     try {
       const result = await hyper.confirmPayment({
@@ -113,6 +144,15 @@ export function CheckoutForm({ bookingId }: { bookingId: string }) {
   return (
     <form onSubmit={handleSubmit}>
       <UnifiedCheckout id="unified-checkout" options={{}} />
+      <label style={{ display: 'block', margin: '0.75rem 0' }}>
+        <input
+          type="checkbox"
+          checked={wantsProtection || protectionAdded}
+          disabled={submitting || protectionAdded}
+          onChange={(e) => setWantsProtection(e.target.checked)}
+        />{' '}
+        {protectionAdded ? 'Trip protection added ($24.00)' : 'Add trip protection ($24.00)'}
+      </label>
       <button type="submit" disabled={submitting} aria-busy={submitting}>
         {submitting ? 'Processing…' : 'Pay and hold my seat'}
       </button>

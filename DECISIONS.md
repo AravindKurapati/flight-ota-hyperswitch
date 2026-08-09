@@ -531,6 +531,31 @@ would. If `GET /refunds/{id}` is confirmed, the fix mirrors `createIntentOrReadB
 exactly: attempt, on failure read back by the `refund_id` we supplied, continue if
 found, throw only if genuinely absent.
 
+### D-022 · Trip protection is auto-confirmed server-side against the dummy connector with fixed test-card data · 2026-08-09
+
+**Chose:** `addTripProtection` (`lib/bookings/protection.ts`) charges the $24.00
+add-on via `createAndConfirmDummyCharge` (`lib/hyperswitch.ts`) — a single
+`POST /payments` with `confirm: true`, `capture_method: automatic`, and
+Hyperswitch's own published test card (`4242424242424242`), sent server-side with
+no browser SDK step.
+**Rejected:** a second SDK-confirmed checkout step for the protection payment. It
+would need a second `client_secret`, a second widget mount, and a second confirm
+round-trip — real UX complexity for a $24 add-on the spec already treats as off the
+critical path. Also rejected: calling plain `createIntent`, which the plan document's
+draft brief did — it produces an *unconfirmed* intent (no `confirm`, no card data)
+that would sit `requires_payment_method` forever and never charge anything; and
+`chargeOffSession`, which needs a stored payment method that does not exist until
+*after* the flight payment confirms with `setup_future_usage`.
+**Why this is safe here and nowhere else:** the `amount < $50` routing rule (D-005)
+guarantees a $24 payment lands on `fauxpay`, Hyperswitch's synthetic dummy
+connector — no real card data ever exists and no real money can move (D-001).
+Sending raw card data server-side to a *real* PSP is exactly what got Stripe removed
+from this project (D-012); the function's JSDoc says so and restricts it to this
+flow. The pattern itself is precedented: `scripts/smoke.ts` has done a server-side
+`confirm: true` card payment since Task 2, and the Task 2 `probe-fauxpay.ps1`
+investigation proved this exact call shape returns `succeeded` immediately against
+`fauxpay`.
+
 ---
 
 ## Verification
