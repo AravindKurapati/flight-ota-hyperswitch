@@ -556,6 +556,27 @@ flow. The pattern itself is precedented: `scripts/smoke.ts` has done a server-si
 investigation proved this exact call shape returns `succeeded` immediately against
 `fauxpay`.
 
+### D-023 · QUOTED → AUTHORIZED advances on the confirmation page's live read, not via webhooks · 2026-08-09
+
+**Chose:** `syncAuthorization` (`lib/bookings/authorize.ts`), called from the
+confirmation page (and the seed script). It reads the flight payment live via
+`getPayment` — never trusting stored state, per D-011 — and advances the booking
+through the state machine's `AUTH_SUCCEEDED` transition only when the live status
+is `requires_capture`, running the D-007 capability check at that moment (the
+post-authorization point Task 10 deliberately deferred it to). It also persists
+`payment_method_id` from the live read when present — the fallback Task 18's brief
+said to record if the webhook path didn't pan out; both paths now exist.
+**Rejected:** advancing `bookings.state` from the webhook handler alone. Webhook
+deliveries need a publicly reachable URL, which a local demo doesn't have — the
+booking would sit `QUOTED` forever and `issueTicket` would refuse it. Found while
+building Task 19's seed script: until this decision, *no code path anywhere*
+performed the QUOTED → AUTHORIZED transition; Tasks 13–18's tests all seeded
+`AUTHORIZED` rows directly, which is why it went unnoticed.
+**Why:** the confirmation page is the one moment we know checkout finished, it
+already did a live `getPayment` for display, and the transition is idempotent
+(a booking past QUOTED is returned unchanged) so a webhook advancing payment
+state alongside it is harmless.
+
 ---
 
 ## Verification
@@ -621,6 +642,24 @@ this account's `required_fields` for card payments do not include a billing/AVS
 field — see D-016. The ZIP-46282 decline path (flow B) could not be exercised
 through the browser in this session as a result; flow A and the double-click guard
 were both fully exercised and hold.
+
+### V-004 · Server-side confirm, full issuance pipeline, and merchant `refund_id`, verified live end-to-end · 2026-08-09
+
+Run: `npm run seed` against the live sandbox, driving the real library functions
+(`createBooking` → `POST /payments/{id}/confirm` → `syncAuthorization` →
+`issueTicket` → `refundBooking`), no hand-crafted rows.
+
+| Probe | Result |
+| --- | --- |
+| `POST /payments/{id}/confirm` with card data on an unconfirmed intent | `requires_capture` on `authorizedotnet` — the confirm endpoint works server-side exactly like the SDK path; previously unverified |
+| Book `itin_sfo_jfk` → issue | `TICKETED`, real ticket number, live capture succeeded |
+| Book `itin_bos_sea` → issue | `VOIDED`, no capture occurred (flow D held end to end) |
+| Partial refund ($50.00 of $352.50) with our own `refund_id` (ULID) | Accepted — Hyperswitch took the merchant-supplied `refund_id` on the live API, confirming the D-021 idempotency design; booking landed `PARTIALLY_REFUNDED` |
+
+Not covered live by this run: MIT/off-session ancillary charging (flow H) — that
+still requires a browser checkout with `setup_future_usage` consent to store a
+payment method first; `authorizedotnet`'s `mit: true` remains SOURCE ONLY
+(`lib/connector-capabilities.ts`).
 
 ---
 

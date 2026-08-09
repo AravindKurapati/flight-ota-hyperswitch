@@ -1,6 +1,7 @@
 import { eq, and } from 'drizzle-orm';
 import { db, bookings, payments } from '../../../db';
 import { getPayment } from '../../../lib/hyperswitch';
+import { syncAuthorization } from '../../../lib/bookings';
 import { findItinerary } from '../../../data/itineraries';
 import { formatUsd } from '../../../lib/money';
 
@@ -14,6 +15,14 @@ export default async function ConfirmationPage({
   params: Promise<{ bookingId: string }>;
 }) {
   const { bookingId } = await params;
+
+  // Task 19 / D-023: the traveller landing here is the one moment we know
+  // checkout finished, and webhooks are unreachable in a local demo — so
+  // this page is where QUOTED advances to AUTHORIZED (verified against a
+  // live getPayment read inside syncAuthorization, not trusted state).
+  // Best-effort: a transport failure here must not break the confirmation
+  // page; the live read below still shows the true payment status.
+  await syncAuthorization(bookingId).catch(() => undefined);
 
   const [booking] = await db.select().from(bookings).where(eq(bookings.id, bookingId));
   if (!booking) {

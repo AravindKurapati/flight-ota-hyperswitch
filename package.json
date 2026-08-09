@@ -12,7 +12,12 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
-    "test:unit": "vitest run tests/unit"
+    "test:unit": "vitest run tests/unit",
+    "test:watch": "vitest",
+    "smoke": "tsx -r dotenv/config scripts/smoke.ts",
+    "seed": "tsx --conditions=react-server -r dotenv/config scripts/seed.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
   },
   "keywords": [],
   "author": "",
