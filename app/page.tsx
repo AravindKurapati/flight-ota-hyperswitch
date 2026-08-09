@@ -9,6 +9,11 @@ import { fareBreakdown, formatUsd } from '../lib/money';
 // by Task 10's tests (lib/bookings/create.ts multiplies per-passenger total
 // by passengers.length); this page exists to drive flows A/B end to end,
 // not to re-exercise that.
+//
+// Visual layer: Hallmark Split Studio / Almanac (see app/globals.css). The
+// left pane states the payment invariant the prototype exists to prove; the
+// right pane is the booking form styled as a timetable. Logic is unchanged
+// from the pre-redesign page.
 export default function HomePage() {
   const router = useRouter();
   const [itineraryId, setItineraryId] = useState(ITINERARIES[0].id);
@@ -50,52 +55,111 @@ export default function HomePage() {
     }
   }
 
+  function departureLabel(departsAt: string): string {
+    return new Date(departsAt).toLocaleDateString('en-US', {
+      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+  }
+
   return (
-    <main style={{ maxWidth: 480, margin: '2rem auto', fontFamily: 'sans-serif' }}>
-      <h1>Book a flight</h1>
-      <form onSubmit={handleSubmit}>
-        <fieldset>
-          <legend>Itinerary</legend>
-          {ITINERARIES.map((itin) => {
-            const fare = fareBreakdown(itin.baseFareMinor);
-            return (
-              <label key={itin.id} style={{ display: 'block', margin: '0.5rem 0' }}>
+    <>
+      <header className="nav-edge">
+        <a className="wordmark" href="/">
+          Flight OTA<small>sandbox</small>
+        </a>
+        <a className="nav-edge__link" href="/ops">
+          Ops console →
+        </a>
+      </header>
+
+      <main className="studio">
+        <section className="promise" aria-label="How payment works">
+          <h1>
+            Pay when the <span className="rule-word">ticket exists</span>.
+          </h1>
+          <p>
+            Your card is authorized at booking and captured only after the airline
+            issues your ticket. If issuance fails, the hold is released — not refunded,
+            released.
+          </p>
+          <p className="fine">
+            Free cancellation within 24 hours. Runs on the Hyperswitch sandbox:
+            no real charges, test cards only.
+          </p>
+        </section>
+
+        <form className="booking" onSubmit={handleSubmit}>
+          <fieldset>
+            <legend>Itinerary</legend>
+            <div className="timetable">
+              {ITINERARIES.map((itin) => {
+                const fare = fareBreakdown(itin.baseFareMinor);
+                return (
+                  <label key={itin.id} className="route">
+                    <input
+                      type="radio"
+                      name="itinerary"
+                      value={itin.id}
+                      checked={itineraryId === itin.id}
+                      onChange={() => setItineraryId(itin.id)}
+                    />
+                    <span className="route__body">
+                      <span className="route__carrier">
+                        {itin.carrier} · {itin.origin} → {itin.destination}
+                      </span>
+                      <span className="route__meta">
+                        {itin.flightNumber} · departs {departureLabel(itin.departsAt)}
+                      </span>
+                    </span>
+                    <span className="route__fare">{formatUsd(fare.total)}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Traveller</legend>
+            <div className="traveller">
+              <div className="field">
+                <label htmlFor="first-name">First name</label>
                 <input
-                  type="radio"
-                  name="itinerary"
-                  value={itin.id}
-                  checked={itineraryId === itin.id}
-                  onChange={() => setItineraryId(itin.id)}
-                />{' '}
-                {itin.carrier} {itin.flightNumber} · {itin.origin} → {itin.destination} ·{' '}
-                {formatUsd(fare.total)}
-              </label>
-            );
-          })}
-        </fieldset>
+                  id="first-name"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  autoComplete="given-name"
+                  required
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="last-name">Last name</label>
+                <input
+                  id="last-name"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  autoComplete="family-name"
+                  required
+                />
+              </div>
+            </div>
+          </fieldset>
 
-        <fieldset>
-          <legend>Traveller</legend>
-          <label>
-            First name
-            <input
-              value={firstName}
-              onChange={(e) => setFirstName(e.target.value)}
-              required
-            />
-          </label>
-          <br />
-          <label>
-            Last name
-            <input value={lastName} onChange={(e) => setLastName(e.target.value)} required />
-          </label>
-        </fieldset>
+          <div className="booking__foot">
+            <button className="btn" type="submit" disabled={submitting} aria-busy={submitting}>
+              {submitting ? 'Booking…' : 'Continue to payment'}
+            </button>
+          </div>
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+        </form>
+      </main>
 
-        <button type="submit" disabled={submitting} aria-busy={submitting}>
-          {submitting ? 'Booking…' : 'Continue to payment'}
-        </button>
-        {error && <p role="alert">{error}</p>}
-      </form>
-    </main>
+      <footer className="foot-line">
+        <p>Hyperswitch hosted sandbox · auth-then-capture · one traveller per booking</p>
+      </footer>
+    </>
   );
 }

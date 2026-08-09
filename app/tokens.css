@@ -1,0 +1,47 @@
+/* Hallmark · genre: editorial · macrostructure: Split Studio · theme: Almanac · enrichment: none · nav: N9 · footer: Ft2
+ * Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V4
+ * tone: editorial-utilitarian · anchor hue: 80 (warm oat) · accent: vermilion 35
+ */
+:root {
+  /* Colour — warm-oat anchor, hue 80; accent vermilion */
+  --color-paper:      oklch(96% 0.012 80);
+  --color-paper-2:    oklch(93% 0.014 80);
+  --color-rule:       oklch(84% 0.012 80);
+  --color-rule-2:     oklch(74% 0.012 80);
+  --color-neutral:    oklch(44% 0.010 75);
+  --color-muted:      oklch(40% 0.010 70);
+  --color-ink:        oklch(20% 0.012 60);
+  --color-ink-2:      oklch(32% 0.012 65);
+  --color-accent:     oklch(48% 0.185 35);
+  --color-accent-ink: oklch(97% 0.010 80);
+  --color-focus:      oklch(43% 0.175 35);
+  --color-error:      oklch(50% 0.190 28);
+
+  /* Type — Fraunces display · IBM Plex Sans body · Geist Mono outlier
+     (families are loaded via next/font in app/layout.tsx, which sets
+      --font-display / --font-body / --font-outlier on <html>) */
+
+  --text-sm:   0.8rem;
+  --text-base: 1rem;
+  --text-md:   1.25rem;
+  --text-lg:   1.5625rem;
+  --text-xl:   1.9531rem;
+  --text-display: clamp(2.4rem, 3.6vw + 1rem, 4rem);
+
+  /* Space — 4pt scale */
+  --space-2xs: 0.25rem;
+  --space-xs:  0.5rem;
+  --space-sm:  0.75rem;
+  --space-md:  1rem;
+  --space-lg:  1.5rem;
+  --space-xl:  2.5rem;
+  --space-2xl: 4rem;
+  --space-3xl: 6rem;
+
+  /* Motion — editorial: near-still */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+
+  --page-gutter: clamp(1rem, 4vw, 3rem);
+}

@@ -1,0 +1,245 @@
+/* Hallmark · genre: editorial · macrostructure: Split Studio · theme: Almanac · enrichment: none · nav: N9 · footer: Ft2 */
+@import './tokens.css';
+
+html {
+  overflow-x: clip;
+}
+body {
+  overflow-x: clip;
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.55;
+}
+
+/* ---- Nav · N9 edge-aligned minimal ---- */
+.nav-edge {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: var(--space-md) var(--page-gutter);
+  border-bottom: 1px solid var(--color-rule);
+}
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-md);
+  letter-spacing: -0.015em;
+  color: var(--color-ink);
+  text-decoration: none;
+}
+.wordmark small {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-inline-start: var(--space-xs);
+  letter-spacing: 0;
+}
+.nav-edge__link {
+  font-size: var(--text-sm);
+  color: var(--color-neutral);
+  text-decoration: none;
+  white-space: nowrap;
+  border-bottom: 1px solid transparent;
+  transition: color var(--dur-short) var(--ease-out);
+}
+.nav-edge__link:hover { color: var(--color-accent); border-bottom-color: var(--color-accent); }
+.nav-edge__link:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+
+/* ---- Split Studio diptych ---- */
+.studio {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: var(--space-2xl);
+  padding: var(--space-2xl) var(--page-gutter) var(--space-3xl);
+  max-width: 72rem;
+  margin-inline: auto;
+}
+@media (max-width: 60rem) {
+  .studio {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-xl);
+    padding-block: var(--space-xl);
+  }
+}
+
+/* Left pane — the promise */
+.promise h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-display);
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+  margin: 0 0 var(--space-lg);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.promise p {
+  max-width: 46ch;
+  color: var(--color-ink-2);
+  margin: 0 0 var(--space-md);
+}
+.promise .fine {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  max-width: 48ch;
+}
+.promise .rule-word {
+  border-bottom: 2px solid var(--color-accent);
+}
+
+/* Right pane — the booking form */
+.booking { min-width: 0; }
+.booking fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0 0 var(--space-xl);
+}
+.booking legend {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-md);
+  letter-spacing: -0.01em;
+  padding: 0;
+  margin-bottom: var(--space-sm);
+}
+
+/* Timetable rows (itinerary radios) */
+.timetable {
+  border-top: 1px solid var(--color-rule-2);
+}
+.route {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--space-md);
+  padding: var(--space-sm) var(--space-2xs);
+  border-bottom: 1px solid var(--color-rule);
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .route:hover { background: var(--color-paper-2); }
+}
+.route:has(input:checked) {
+  background: var(--color-paper-2);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+.route:has(input:focus-visible) {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+.route input {
+  accent-color: var(--color-accent);
+  margin: 0;
+  align-self: center;
+}
+.route__body { min-width: 0; }
+.route__carrier { display: block; }
+.route__meta {
+  display: block;
+  font-family: var(--font-outlier);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.route__fare {
+  font-family: var(--font-outlier);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Traveller inputs */
+.traveller {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-md);
+}
+@media (max-width: 26rem) {
+  .traveller { grid-template-columns: minmax(0, 1fr); }
+}
+.field label {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--color-neutral);
+  margin-bottom: var(--space-2xs);
+}
+.field input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 2.75rem;
+  padding: 0 var(--space-sm);
+  font: inherit;
+  color: var(--color-ink);
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule-2);
+  border-radius: 2px;
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  transition: background-color var(--dur-short) var(--ease-out);
+}
+@media (hover: hover) {
+  .field input:hover { background: var(--color-paper-2); }
+}
+.field input:focus-visible {
+  outline-color: var(--color-focus);
+  border-color: var(--color-ink-2);
+}
+.field input:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* CTA + error */
+.booking__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  margin-top: var(--space-lg);
+}
+.btn {
+  height: 2.75rem;
+  padding: 0 var(--space-lg);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background-color var(--dur-short) var(--ease-out),
+              transform var(--dur-micro) var(--ease-out);
+}
+@media (hover: hover) {
+  .btn:hover:not(:disabled) { background: var(--color-focus); }
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.form-error {
+  margin: var(--space-md) 0 0;
+  padding-left: var(--space-sm);
+  border-left: 2px solid var(--color-error);
+  color: var(--color-error);
+  font-size: var(--text-sm);
+  max-width: 52ch;
+}
+
+/* ---- Footer · Ft2 inline single line ---- */
+.foot-line {
+  border-top: 1px solid var(--color-rule);
+  padding: var(--space-md) var(--page-gutter) var(--space-lg);
+}
+.foot-line p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 150ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 150ms !important;
+  }
+}
