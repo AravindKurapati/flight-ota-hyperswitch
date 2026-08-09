@@ -29,7 +29,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { eq } from 'drizzle-orm';
-import { db, bookings, payments, bookingEvents } from '../../db';
+import { db, bookings, payments, refunds, bookingEvents } from '../../db';
 import { newId, toHsPaymentId } from '../../lib/ids';
 import { FALLBACK_DATABASE_URL } from '../setup-env';
 
@@ -108,6 +108,7 @@ describe.skipIf(!hasRealDatabase)('POST /api/webhooks/hyperswitch (requires a re
       await db.delete(bookingEvents).where(eq(bookingEvents.bookingId, bookingId));
     }
     for (const id of paymentIds) {
+      await db.delete(refunds).where(eq(refunds.paymentId, id));
       await db.delete(payments).where(eq(payments.id, id));
     }
     for (const bookingId of bookingIds) {
@@ -340,6 +341,44 @@ describe.skipIf(!hasRealDatabase)('POST /api/webhooks/hyperswitch (requires a re
     const [row] = await db.select().from(payments).where(eq(payments.id, id));
     expect(row.state).toBe('succeeded'); // normal advance still happened
     expect(row.connector).toBe('authorizedotnet'); // NOT nulled out
+  });
+
+  it('a refund event never touches the payment row: refund state lands on the refunds row, refund.failed is recorded', async () => {
+    // Live repro (V-005 follow-up): the refund-failed webhook for a partial
+    // refund carries the PAYMENT's id inside its object, and the generic
+    // monotonic advance applied the refund's 'failed' (rank 7) on top of the
+    // payment's 'succeeded' (rank 6) — a captured payment was relabelled
+    // failed by its own refund's failure.
+    const { POST } = await import('../../app/api/webhooks/hyperswitch/route');
+    const bookingId = await makeBooking();
+    const { hsPaymentId, id } = await makePayment(bookingId, {
+      kind: 'flight', state: 'succeeded', connector: 'authorizedotnet',
+    });
+    const refundId = newId();
+    await db.insert(refunds).values({
+      id: refundId, paymentId: id, hsRefundId: refundId,
+      amountMinor: 10000, reason: 'webhook_refund_evt', state: 'pending',
+    });
+
+    const body = JSON.stringify({
+      event_id: `evt_${Date.now()}`,
+      content: { object: { refund_id: refundId, payment_id: hsPaymentId, status: 'failed' } },
+    });
+    const res = await POST(webhookRequest(body, sign(body)));
+    expect(res.status).toBe(200);
+
+    // The payment row is untouched — this is the assertion the live bug fails.
+    const [p] = await db.select().from(payments).where(eq(payments.id, id));
+    expect(p.state).toBe('succeeded');
+
+    // The refund row took the state instead.
+    const [ref] = await db.select().from(refunds).where(eq(refunds.id, refundId));
+    expect(ref.state).toBe('failed');
+
+    const events = await db.select().from(bookingEvents).where(eq(bookingEvents.bookingId, bookingId));
+    const types = events.map((e) => e.type);
+    expect(types).toContain('webhook.received');
+    expect(types).toContain('refund.failed');
   });
 
   it('acknowledges an unknown payment_id with 200 and writes nothing', async () => {

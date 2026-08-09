@@ -147,7 +147,17 @@ CREATE INDEX booking_events_booking_id_idx ON booking_events (booking_id, create
 Event types: `booking.created`, `payment.authorized`, `payment.declined`,
 `payment.retried`, `ticketing.attempted`, `ticketing.succeeded`, `ticketing.failed`,
 `payment.captured`, `payment.voided`, `payment.void_failed`, `refund.created`,
-`protection.added`, `webhook.received`, `idempotent.replay`, `capability.violation`.
+`refund.failed`, `protection.added`, `webhook.received`, `idempotent.replay`,
+`capability.violation`, `ops.reconciled`.
+
+`refund.failed` records a refund the connector refused — either synchronously
+(Hyperswitch returns HTTP 200 with `status: "failed"`, e.g. Authorize.net
+error 54 on an unsettled capture) or asynchronously via a refund webhook. The
+booking's state is never advanced by a failed refund; a failure arriving
+*after* an earlier advance is surfaced by this event for a human rather than
+walked back automatically (D-011: reconciliation is surfaced, not automated).
+`ops.reconciled` is that human's mark: a hand-applied state correction, with
+the reasoning in its payload.
 
 `payment.void_failed` records a void attempt whose Hyperswitch call failed. It is
 written after the surrounding transaction has rolled back (the failure aborts the

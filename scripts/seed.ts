@@ -104,19 +104,29 @@ async function main() {
   if (voided.state !== 'VOIDED') throw new Error(`expected VOIDED, got ${voided.state}`);
   console.log('   booking:', doomed);
 
-  console.log('4. PARTIALLY_REFUNDED — issued, then $50.00 refunded');
+  console.log('4. PARTIALLY_REFUNDED — issued, then $50.00 refunded (best effort)');
   const refundable = await bookAndAuthorize('itin_sfo_jfk', 'Refunded');
   const issued2 = await issueTicket(refundable);
   if (issued2.state !== 'TICKETED') throw new Error(`expected TICKETED, got ${issued2.state}`);
-  const refunded = await refundBooking({
-    bookingId: refundable, amountMinor: 5000, reason: 'seed_partial_refund',
-  });
-  if (refunded.state !== 'PARTIALLY_REFUNDED') {
-    throw new Error(`expected PARTIALLY_REFUNDED, got ${refunded.state}`);
+  // Authorize.net refuses to credit a capture that has not settled (error
+  // 54, settlement runs in a nightly batch), so a refund in the same run as
+  // its capture ALWAYS fails and refundBooking now correctly throws instead
+  // of advancing state (V-005). The booking stays TICKETED — still
+  // demonstrable, and refundable for real from /ops once settled. Only a
+  // refund on a capture from a previous day can land PARTIALLY_REFUNDED.
+  try {
+    const refunded = await refundBooking({
+      bookingId: refundable, amountMinor: 5000, reason: 'seed_partial_refund',
+    });
+    console.log('   refunded, state:', refunded.state);
+  } catch (e) {
+    console.log('   refund refused by connector (expected on a same-day capture):');
+    console.log('  ', e instanceof Error ? e.message : e);
+    console.log('   booking stays TICKETED — refund it from /ops after settlement.');
   }
   console.log('   booking:', refundable);
 
-  console.log('\nSEED COMPLETE — open /ops to see all four states.');
+  console.log('\nSEED COMPLETE — open /ops.');
 }
 
 main()

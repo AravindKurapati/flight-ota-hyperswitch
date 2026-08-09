@@ -16,6 +16,10 @@ export type HsRefund = {
   payment_id: string;
   amount: number;
   status: string;
+  /** Connector's failure reason when status is 'failed' — e.g. Authorize.net
+   * error 54, "does not meet the criteria for issuing a credit" (an
+   * unsettled capture cannot be credited). Observed live, V-005. */
+  error_message?: string | null;
 };
 
 export type OrderDetail = {

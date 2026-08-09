@@ -41,7 +41,13 @@ export async function refundBooking(input: {
   const payment = await flightPaymentFor(input.bookingId);
 
   const existing = await db.select().from(refunds).where(eq(refunds.paymentId, payment.id));
-  const alreadyRefunded = existing.reduce((sum, r) => sum + r.amountMinor, 0);
+  // Failed attempts stay on record for audit but no money moved — counting
+  // them would block legitimate retries against the over-refund cap
+  // (observed live, V-005: Authorize.net refuses credits on unsettled
+  // captures with error 54, returned as HTTP 200 + status 'failed').
+  const alreadyRefunded = existing
+    .filter((r) => r.state !== 'failed' && r.state !== 'failure')
+    .reduce((sum, r) => sum + r.amountMinor, 0);
   if (alreadyRefunded + input.amountMinor > payment.amountMinor) {
     throw new Error(
       `Refund exceeds captured amount: ${alreadyRefunded} + ${input.amountMinor} > ${payment.amountMinor}`,
@@ -64,10 +70,35 @@ export async function refundBooking(input: {
         refundId,
       });
 
+      // Persist the attempt whatever its status — the row is the audit
+      // record. On a retry after a FAILED attempt under the same reason, the
+      // (payment_id, reason) unique index would reject a second insert, so
+      // the failed row is superseded in place instead.
       await db.insert(refunds).values({
         id: refundId, paymentId: payment.id, hsRefundId: hsResult.refund_id,
         amountMinor: input.amountMinor, reason: input.reason, state: hsResult.status,
+      }).onConflictDoUpdate({
+        target: [refunds.paymentId, refunds.reason],
+        set: {
+          hsRefundId: hsResult.refund_id, amountMinor: input.amountMinor,
+          state: hsResult.status, updatedAt: new Date(),
+        },
       });
+
+      // Hyperswitch reports a connector refusal as HTTP 200 with
+      // status 'failed' — acceptance of the request is not success of the
+      // refund. No money moved, so the booking must not move either; the
+      // throw releases the idempotency key so the caller can retry once the
+      // underlying cause (e.g. an unsettled capture) clears.
+      if (hsResult.status === 'failed' || hsResult.status === 'failure') {
+        await recordEvent(input.bookingId, 'refund.failed', {
+          amount: input.amountMinor, reason: input.reason, refundId,
+          ...(hsResult.error_message ? { errorMessage: hsResult.error_message } : {}),
+        });
+        throw new Error(
+          `Refund failed at the connector${hsResult.error_message ? `: ${hsResult.error_message}` : ''}`,
+        );
+      }
 
       const total = alreadyRefunded + input.amountMinor;
       const state = nextState(

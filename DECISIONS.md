@@ -693,6 +693,49 @@ Webhook payload field shapes beyond `status`/`payment_id` (e.g. whether
 `payment_method_id` rides along on flight-payment events) also remain
 docs-verified only until a flight payment with a saved card exists.
 
+### D-024 · Refund acceptance is not refund success — treat `status: "failed"` as failure, and never let a refund event touch payment state · 2026-08-09
+
+**What happened, live.** The V-005 walkthrough's $100 refund came back HTTP 200
+— and `status: "failed"`: Authorize.net error 54, *"the referenced transaction
+does not meet the criteria for issuing a credit"*. A capture cannot be credited
+until it settles, and the sandbox settles in a nightly batch, so every same-day
+refund fails. Two bugs compounded from there:
+
+1. `refundBooking` treated the 200 as success and advanced the booking to
+   `PARTIALLY_REFUNDED` with zero money returned. (V-004's earlier
+   "accepted" seed refund turns out to have failed identically — both
+   bookings were hand-reconciled back to `TICKETED`, recorded as
+   `ops.reconciled` events.)
+2. The refund-failed **webhook** carries the payment's id inside its object,
+   and the handler's generic monotonic advance applied the refund's `failed`
+   (rank 7) over the payment's `succeeded` (rank 6) — a captured payment
+   relabelled failed by its own refund's failure. The ops console's
+   divergence flag caught it, which is exactly the D-011 design working.
+
+**Chosen.** (a) `refundBooking` now records the attempt (`refund.failed`
+event, refunds row kept as audit) and **throws** on `status: "failed"` —
+booking state untouched, idempotency key released so the same
+`(payment, reason)` can be retried after settlement, with the failed row
+superseded in place and excluded from the over-refund cap. (b) The webhook
+handler routes any event whose object carries a `refund_id` to the refunds
+row only; payment state is unreachable from refund events. (c) A refund that
+fails *asynchronously* after an earlier advance is surfaced (`refund.failed`)
+for a human, not walked back automatically — same posture as stored-vs-live
+divergence.
+
+**Rejected.** Automatic booking-state walk-back on async refund failure: the
+state machine deliberately has no `PARTIALLY_REFUNDED → TICKETED` transition,
+and inventing one driven by unordered, at-least-once webhooks trades a
+visible, rare reconciliation task for a new class of silent state churn.
+Also rejected: refusing refunds client-side until settlement — we cannot see
+the connector's settlement schedule; the connector is the authority, we
+surface its answer.
+
+**Consequence for demos.** A refund demoed the same day as its capture will
+(correctly) report the connector's refusal; refund a booking whose capture
+has settled overnight to show `PARTIALLY_REFUNDED` for real. `npm run seed`
+now states this instead of failing.
+
 ---
 
 ## Deferred, with reasoning

@@ -133,6 +133,55 @@ describe.skipIf(!hasRealDatabase)('refundBooking (requires a real DATABASE_URL)'
     expect(vi.mocked(refund)).not.toHaveBeenCalled();
   });
 
+  it('a refund the connector refuses does not advance the booking, is recorded as failed, and is retryable under the same reason', async () => {
+    // Live repro (V-005 follow-up): Authorize.net error 54 — a capture that
+    // has not settled cannot be credited. Hyperswitch returns HTTP 200 with
+    // `status: "failed"`; treating that as a completed refund advanced a
+    // booking to PARTIALLY_REFUNDED with zero money actually returned.
+    const { refundBooking } = await import('../../lib/bookings');
+    const { refund } = await import('../../lib/hyperswitch');
+    const { bookingId, paymentId } = await seedTicketedBooking();
+    createdBookingIds.push(bookingId);
+    usedPaymentIds.push(paymentId);
+
+    vi.mocked(refund).mockImplementationOnce(async (input) => ({
+      refund_id: input.refundId ?? 'ref_failed',
+      payment_id: input.hsPaymentId,
+      amount: input.amountMinor,
+      status: 'failed',
+      error_message: 'The referenced transaction does not meet the criteria for issuing a credit.',
+    }));
+
+    await expect(
+      refundBooking({ bookingId, amountMinor: 10000, reason: 'unsettled_capture' }),
+    ).rejects.toThrow(/Refund failed/);
+
+    // The booking must not move — no money left the connector.
+    const [afterFail] = await db.select().from(bookings).where(eq(bookings.id, bookingId));
+    expect(afterFail.state).toBe('TICKETED');
+
+    // The attempt survives as an audit row marked failed, and the event log
+    // says refund.failed, not refund.created.
+    const failedRows = await db.select().from(refunds).where(eq(refunds.paymentId, paymentId));
+    expect(failedRows).toHaveLength(1);
+    expect(failedRows[0].state).toBe('failed');
+    const events = await db.select().from(bookingEvents)
+      .where(eq(bookingEvents.bookingId, bookingId));
+    expect(events.map((e) => e.type)).toContain('refund.failed');
+    expect(events.map((e) => e.type)).not.toContain('refund.created');
+
+    // The throw released the idempotency key, and the failed row must not
+    // block the retry via the (payment_id, reason) unique index, nor count
+    // toward the over-refund cap.
+    const retry = await refundBooking({ bookingId, amountMinor: CAPTURED, reason: 'unsettled_capture' });
+    expect(retry.state).toBe('REFUNDED'); // full amount — the failed 10000 did not count
+    expect(vi.mocked(refund)).toHaveBeenCalledTimes(2);
+    const finalRows = await db.select().from(refunds).where(eq(refunds.paymentId, paymentId));
+    expect(finalRows).toHaveLength(1);
+    expect(finalRows[0].state).toBe('succeeded');
+    expect(finalRows[0].amountMinor).toBe(CAPTURED);
+  });
+
   it('successive partial refunds exercise the PARTIALLY_REFUNDED self-loop, then reach REFUNDED at the full amount', async () => {
     const { refundBooking } = await import('../../lib/bookings');
     const { bookingId, paymentId } = await seedTicketedBooking();

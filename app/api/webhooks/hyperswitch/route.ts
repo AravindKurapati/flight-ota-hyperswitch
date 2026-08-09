@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
-import { db, bookings, payments } from '../../../../db';
+import { db, bookings, payments, refunds } from '../../../../db';
 import { verifySignature } from '../../../../lib/webhooks';
 import { recordEvent } from '../../../../lib/events';
 import { assertCapableOrThrow, ConnectorCapabilityError } from '../../../../lib/connector-capabilities';
@@ -55,6 +55,40 @@ export async function POST(req: NextRequest) {
   const hsPaymentId: string | undefined = event?.content?.object?.payment_id;
   const status: string | undefined = event?.content?.object?.status;
   if (!hsPaymentId || !status) return NextResponse.json({ ok: true });
+
+  // Refund events carry the payment's id inside their object too — without
+  // this branch, the generic monotonic advance below applies the REFUND's
+  // status to the PAYMENT row. Observed live (V-005): a refund-failed
+  // delivery ('failed', rank 7) relabelled a captured payment ('succeeded',
+  // rank 6) as failed. A refund's state belongs on the refunds row, and a
+  // failed refund after the booking already advanced is surfaced as a
+  // refund.failed event for a human — reconciliation is surfaced, not
+  // automated (D-011); the booking state machine has no automatic
+  // walk-back transition by design.
+  const hsRefundId: string | undefined = event?.content?.object?.refund_id;
+  if (typeof hsRefundId === 'string' && hsRefundId) {
+    const [ref] = await db.select().from(refunds).where(eq(refunds.hsRefundId, hsRefundId));
+    if (ref) {
+      const REFUND_TERMINAL = new Set(['succeeded', 'failed', 'failure']);
+      if (!REFUND_TERMINAL.has(ref.state) && ref.state !== status) {
+        await db.update(refunds)
+          .set({ state: status, updatedAt: new Date() })
+          .where(eq(refunds.id, ref.id));
+      }
+      const [p] = await db.select().from(payments).where(eq(payments.id, ref.paymentId));
+      if (p) {
+        await recordEvent(p.bookingId, 'webhook.received', {
+          hsPaymentId, refundId: hsRefundId, status, eventId: event?.event_id ?? null,
+        });
+        if (status === 'failed' || status === 'failure') {
+          await recordEvent(p.bookingId, 'refund.failed', {
+            refundId: hsRefundId, amount: ref.amountMinor, reason: ref.reason,
+          });
+        }
+      }
+    }
+    return NextResponse.json({ ok: true });
+  }
 
   // Correction 1 (D-007 finally wired): the webhook payload's exact shape
   // for `connector` is UNVERIFIED this session -- Exa was offline and there
