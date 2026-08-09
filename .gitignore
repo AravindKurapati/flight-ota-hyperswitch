@@ -9,3 +9,4 @@ next-env.d.ts
 coverage/
 .superpowers/
 .env*
+docs/session-transcript.md
