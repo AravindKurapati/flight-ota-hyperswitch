@@ -108,6 +108,7 @@ via `npm run smoke` or the API directly.
 
 ## Documents
 
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the 3-page architecture and decisions doc
 - [FEATURE_booking_payments.md](FEATURE_booking_payments.md) — product spec: flows, state machine, invariants
 - [SCHEMA.md](SCHEMA.md) — schema of record
-- [DECISIONS.md](DECISIONS.md) — every payment-behaviour decision (D-001…D-023) and live verification log (V-001…V-004)
+- [DECISIONS.md](DECISIONS.md) — every payment-behaviour decision (D-001…D-024) and live verification log (V-001…V-005)
