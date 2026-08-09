@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { db, bookings, payments } from '../../../../db';
 import { getPayment } from '../../../../lib/hyperswitch';
 
@@ -11,7 +11,12 @@ export async function GET() {
   const rows = await db.select().from(bookings).orderBy(desc(bookings.createdAt)).limit(25);
 
   const enriched = await Promise.all(rows.map(async (b) => {
-    const [p] = await db.select().from(payments).where(eq(payments.bookingId, b.id));
+    // The FLIGHT payment drives the console's state columns. Without the
+    // kind filter, a booking that also bought trip protection could show
+    // the $24 fauxpay charge here instead of the fare it exists to watch
+    // (found live: first two-payment booking rendered connector=fauxpay).
+    const [p] = await db.select().from(payments)
+      .where(and(eq(payments.bookingId, b.id), eq(payments.kind, 'flight')));
     let live: string | null = null;
     try {
       live = p ? (await getPayment(p.hsPaymentId)).status : null;

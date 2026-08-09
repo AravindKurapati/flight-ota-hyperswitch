@@ -661,6 +661,38 @@ still requires a browser checkout with `setup_future_usage` consent to store a
 payment method first; `authorizedotnet`'s `mit: true` remains SOURCE ONLY
 (`lib/connector-capabilities.ts`).
 
+### V-005 · Hosted production walkthrough: full lifecycle, live webhook delivery, and the save-card dead end · 2026-08-09
+
+Run: hand-driven browser session against the deployed prototype
+(https://flight-ota-hyperswitch.vercel.app), real unified-checkout SDK, no mocks
+anywhere.
+
+| Probe | Result |
+| --- | --- |
+| Book → checkout → confirm (4242… card, no save-card) | `requires_capture` on `authorizedotnet`; confirmation page's `syncAuthorization` moved the booking to `AUTHORIZED` (D-023 held in production) |
+| Trip protection ticked at checkout | $24.00 auto-charged server-side on `fauxpay`, `protection.added` recorded, flight confirm unaffected (D-022 held) |
+| First live outgoing webhook (protection `succeeded`) | Delivered to the registered endpoint, HMAC signature verified, `webhook.received` recorded — the webhook path is no longer verified only against synthetic payloads |
+| Ops console → Issue ticket | `TICKETED` with a real ticket number; capture followed issuance (flow C in production) |
+| Partial refund ($100.00) via the refund API route | `PARTIALLY_REFUNDED`, our `refund_id` accepted |
+
+**The save-card dead end, observed twice on separate bookings:** ticking the
+SDK's own "Save card details" box makes `confirmPayment` fail client-side with
+the SDK's generic "Something went wrong". Network capture shows **no request
+ever leaves the browser** — the intent stays `requires_payment_method` with no
+error recorded and no connector attempt, even though the intent carries
+`setup_future_usage: off_session` and a `customer_id` as the docs require. The
+failure is inside the SDK's minified iframe code, out of our reach. Untick the
+box and the identical confirm succeeds.
+
+Consequence: no `payment_method_id` is ever stored, so MIT ancillary charging
+(flow H) stays **deferred, not demonstrated** — and the capability guardrail is
+doing precisely its job: `authorizedotnet` remains `mit: SOURCE ONLY` in
+`lib/connector-capabilities.ts`, and the ancillary endpoint refuses cleanly
+("no stored payment method") rather than attempting a charge we cannot verify.
+Webhook payload field shapes beyond `status`/`payment_id` (e.g. whether
+`payment_method_id` rides along on flight-payment events) also remain
+docs-verified only until a flight payment with a saved card exists.
+
 ---
 
 ## Deferred, with reasoning
