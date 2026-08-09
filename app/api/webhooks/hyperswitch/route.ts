@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
-import { db, payments } from '../../../../db';
+import { db, bookings, payments } from '../../../../db';
 import { verifySignature } from '../../../../lib/webhooks';
 import { recordEvent } from '../../../../lib/events';
 import { assertCapableOrThrow, ConnectorCapabilityError } from '../../../../lib/connector-capabilities';
@@ -135,6 +135,25 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({ ok: true });
     }
+  }
+
+  // Task 18: capture the stored payment method for later off-session
+  // ancillary charges (flow H). Same undefined-vs-null discipline as
+  // `connector` (D-018): whether the webhook payload actually carries
+  // `payment_method_id` is equally unverified — `undefined` means the field
+  // is absent from this payload and nothing is written; a present value
+  // (including a genuine `null`, legitimate before a payment method exists)
+  // is persisted truthfully. Flight payments only: that's the payment
+  // created with `setup_future_usage: off_session` (Task 10), i.e. the one
+  // the traveller consented to store a card against. Fallback if live
+  // deliveries turn out not to carry the field: persist it from the
+  // confirmation page's existing `getPayment` read (Task 11) — record that
+  // switch in DECISIONS.md rather than making it silently.
+  const paymentMethodId: string | null | undefined = event?.content?.object?.payment_method_id;
+  if (row.kind === 'flight' && paymentMethodId !== undefined) {
+    await db.update(bookings)
+      .set({ paymentMethodId, updatedAt: new Date() })
+      .where(eq(bookings.id, row.bookingId));
   }
 
   // Capability check passed, or the payload didn't carry a `connector`
