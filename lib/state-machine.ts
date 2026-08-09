@@ -55,11 +55,20 @@ export const TERMINAL_STATES: ReadonlySet<BookingState> = new Set<BookingState>(
 ]);
 
 export function canTransition(from: BookingState, event: BookingEvent): boolean {
-  return TRANSITIONS[from][event] !== undefined;
+  // Unknown `from` (a corrupted row, a future migration bug) resolves to
+  // false rather than throwing — this function's contract is a boolean.
+  return TRANSITIONS[from]?.[event] !== undefined;
 }
 
 export function nextState(from: BookingState, event: BookingEvent): BookingState {
-  const to = TRANSITIONS[from][event];
+  // Guard the `from` index explicitly: `state` here is usually read straight
+  // off a database row, and an out-of-enum value would otherwise surface as
+  // `TypeError: Cannot read properties of undefined` — undiagnosable at 2am.
+  const transitions = TRANSITIONS[from];
+  if (transitions === undefined) {
+    throw new Error(`Unknown booking state: "${from}"`);
+  }
+  const to = transitions[event];
   if (to === undefined) {
     throw new Error(`Illegal transition: ${from} cannot handle ${event}`);
   }

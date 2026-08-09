@@ -43,4 +43,12 @@ describe('booking state machine', () => {
   it('throws on an illegal transition rather than silently ignoring it', () => {
     expect(() => nextState('VOIDED', 'AUTH_SUCCEEDED')).toThrow(/VOIDED/);
   });
+
+  it('throws a clean, named error on an unknown from-state, not a TypeError', () => {
+    // A corrupted database row must surface as a diagnosable error message,
+    // never as `Cannot read properties of undefined`.
+    expect(() => nextState('BOGUS' as never, 'AUTH_SUCCEEDED'))
+      .toThrow(/Unknown booking state: "BOGUS"/);
+    expect(canTransition('BOGUS' as never, 'AUTH_SUCCEEDED')).toBe(false);
+  });
 });

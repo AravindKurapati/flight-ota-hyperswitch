@@ -482,6 +482,28 @@ field instead of only interpolating it into the message text. `REQUIREMENTS` its
 stays private to `connector-capabilities.ts` — only the already-computed result is
 exposed, not the table that produced it.
 
+### D-020 · Residual risk accepted: an ambiguous `capture` failure during issuance can lead to a duplicate capture attempt on retry · 2026-08-09
+
+**Chose:** accept and record the risk rather than build read-back machinery for it.
+In `issueTicket` (`lib/bookings/issue.ts`), if `capture` throws *after* Hyperswitch
+has actually captured the funds — a timeout or dropped connection with the response
+lost — the surrounding transaction rolls back, the booking reverts to
+`TICKETING`/`AUTHORIZED`, and a retry re-runs `attemptIssuance` (which, for a
+stateful itinerary like `itin_ord_lax`, can produce a *new* ticket number) and then
+calls `capture` a second time on a payment that may already be captured.
+**Rejected:** a `getPayment` read-back before retrying capture (the D-014 pattern),
+because whether Hyperswitch's `/payments/{id}/capture` is idempotent for an
+already-captured payment — clean replay vs. error — is unverified this session, and
+building recovery logic on an unverified behaviour is guessing.
+**Why:** the window is narrow (a transport failure landing exactly between
+Hyperswitch capturing and us receiving the response), the money-safety direction is
+bounded (a second capture on an already-captured `manual` payment either no-ops or
+errors; it cannot double-charge a fresh authorization), and the ops console
+(Task 16) shows stored vs. live payment state side by side — divergence is the
+detection mechanism, per D-011's "reconciliation is surfaced, not automated". If
+capture idempotency is later verified live, the fix mirrors
+`createIntentOrReadBack` exactly.
+
 ---
 
 ## Verification

@@ -1,6 +1,7 @@
 import 'server-only';
 import { and, eq } from 'drizzle-orm';
 import { db, payments } from '../../db';
+import type { Transaction } from '../events';
 
 export type Passenger = { firstName: string; lastName: string };
 
@@ -14,7 +15,7 @@ export function pnr(): string {
 }
 
 /** Every operation that touches money needs the booking's flight payment. */
-export async function flightPaymentFor(bookingId: string, tx: typeof db = db) {
+export async function flightPaymentFor(bookingId: string, tx: Transaction | typeof db = db) {
   const [row] = await tx.select().from(payments)
     .where(and(eq(payments.bookingId, bookingId), eq(payments.kind, 'flight')));
   if (!row) throw new Error(`No flight payment for booking ${bookingId}`);
