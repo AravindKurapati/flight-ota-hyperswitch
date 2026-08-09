@@ -146,8 +146,14 @@ CREATE INDEX booking_events_booking_id_idx ON booking_events (booking_id, create
 
 Event types: `booking.created`, `payment.authorized`, `payment.declined`,
 `payment.retried`, `ticketing.attempted`, `ticketing.succeeded`, `ticketing.failed`,
-`payment.captured`, `payment.voided`, `refund.created`, `webhook.received`,
-`idempotent.replay`, `capability.violation`.
+`payment.captured`, `payment.voided`, `payment.void_failed`, `refund.created`,
+`webhook.received`, `idempotent.replay`, `capability.violation`.
+
+`payment.void_failed` records a void attempt whose Hyperswitch call failed. It is
+written after the surrounding transaction has rolled back (the failure aborts the
+transaction, so a record written inside it would vanish — and a pool-connection
+write while the transaction still held the booking row `FOR UPDATE` would
+self-deadlock on the FK's KEY SHARE lock).
 
 `idempotent.replay` and `capability.violation` exist so the guards are observable rather
 than silent — a duplicate that is correctly swallowed should still leave a trace.
