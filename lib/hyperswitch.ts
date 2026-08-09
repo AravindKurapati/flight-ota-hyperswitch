@@ -90,6 +90,7 @@ export function refund(input: RefundInput): Promise<HsRefund> {
     payment_id: input.hsPaymentId,
     amount: input.amountMinor,
     reason: input.reason,
+    ...(input.refundId ? { refund_id: input.refundId } : {}),
   });
 }
 

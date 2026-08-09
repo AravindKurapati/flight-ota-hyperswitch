@@ -504,6 +504,33 @@ detection mechanism, per D-011's "reconciliation is surfaced, not automated". If
 capture idempotency is later verified live, the fix mirrors
 `createIntentOrReadBack` exactly.
 
+### D-021 · Refunds use `withIdempotency` plus a merchant `refund_id`; ambiguous-failure read-back deferred · 2026-08-09
+
+**Chose:** guard `refundBooking` (`lib/bookings/refund.ts`) with `withIdempotency`,
+keyed deterministically on the natural key `refund:{paymentId}:{reason}`, and pass a
+merchant-minted `refund_id` (a ULID) through to `POST /refunds` — Hyperswitch
+accepts a merchant-supplied `refund_id`, verified against api-reference.hyperswitch.io
+earlier this session, closing the question left open in Task 6. The
+`(payment_id, reason)` unique index remains as defense-in-depth and the queryable
+record; the tests prove it never fires on a replay.
+**Rejected:** the plan document's draft mechanism — insert the `refunds` row first
+and let the unique index reject a duplicate before calling Hyperswitch. It works
+against literal double submission, but it is a second, weaker idempotency mechanism
+sitting next to the one this codebase already reviewed and hardened twice (Tasks 8
+and 10), and it lacks `withIdempotency`'s release-only-on-throw property.
+**Why:** one mechanism, already trusted, over two inconsistent ones.
+
+**Accepted, recorded gap:** if `hsRefund` throws *ambiguously* — the refund created
+at Hyperswitch, the response lost — the idempotency key releases and a retry could
+issue a second refund. The full fix needs a `GET /refunds/{id}` read-back, and that
+endpoint's existence is unverified this session; guessing at it is forbidden by the
+project rules. Severity is asymmetric: a duplicate refund costs the merchant money
+and needs ops reconciliation (visible in the ops console or the Hyperswitch
+dashboard), it never overcharges a traveller the way a duplicate payment creation
+would. If `GET /refunds/{id}` is confirmed, the fix mirrors `createIntentOrReadBack`
+exactly: attempt, on failure read back by the `refund_id` we supplied, continue if
+found, throw only if genuinely absent.
+
 ---
 
 ## Verification

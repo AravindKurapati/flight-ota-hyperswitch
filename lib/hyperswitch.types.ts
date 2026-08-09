@@ -47,6 +47,13 @@ export type RefundInput = {
   hsPaymentId: string;
   amountMinor: number;
   reason: string;
+  /**
+   * Merchant-supplied refund identifier, passed through as `refund_id`.
+   * Same idempotency-by-owned-identifier pattern as `hs_payment_id` (D-010):
+   * Hyperswitch's POST /refunds accepts it, verified against
+   * api-reference.hyperswitch.io (Task 6 follow-up, closed in Task 15).
+   */
+  refundId?: string;
 };
 
 export class HyperswitchError extends Error {
