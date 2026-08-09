@@ -22,6 +22,13 @@ function alreadyTerminal(state: string): boolean {
   return (RANK[state] ?? -1) >= TERMINAL_RANK;
 }
 
+// Hyperswitch deliveries are always POSTs; this GET exists only so URL
+// health probes (e.g. the dashboard's endpoint check) see a 200 instead
+// of a 405. It exposes nothing and accepts nothing.
+export async function GET() {
+  return NextResponse.json({ status: 'ok', accepts: 'POST' });
+}
+
 export async function POST(req: NextRequest) {
   const raw = await req.text();
   const signature = req.headers.get('x-webhook-signature-512') ?? '';
