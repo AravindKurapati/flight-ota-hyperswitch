@@ -144,20 +144,24 @@ export function CheckoutForm({ bookingId }: { bookingId: string }) {
   return (
     <form onSubmit={handleSubmit}>
       <UnifiedCheckout id="unified-checkout" options={{}} />
-      <label style={{ display: 'block', margin: '0.75rem 0' }}>
+      <label className="protection-row">
         <input
           type="checkbox"
           checked={wantsProtection || protectionAdded}
           disabled={submitting || protectionAdded}
           onChange={(e) => setWantsProtection(e.target.checked)}
-        />{' '}
+        />
         {protectionAdded ? 'Trip protection added ($24.00)' : 'Add trip protection ($24.00)'}
       </label>
-      <button type="submit" disabled={submitting} aria-busy={submitting}>
+      <button className="btn" type="submit" disabled={submitting} aria-busy={submitting}>
         {submitting ? 'Processing…' : 'Pay and hold my seat'}
       </button>
-      {message && <p role="alert">{message}</p>}
-      <p>
+      {message && (
+        <p className="form-error" role="alert">
+          {message}
+        </p>
+      )}
+      <p className="checkout-note">
         Your card is authorized now and charged only once your ticket is issued.
         Free cancellation within 24 hours.
       </p>

@@ -48,12 +48,56 @@ export default function CheckoutPage({
     };
   }, [bookingId]);
 
-  if (loadError) return <p role="alert">{loadError}</p>;
-  if (!clientSecret || !hyperPromise) return <p>Loading checkout…</p>;
+  if (loadError) {
+    return (
+      <>
+        <header className="nav-edge">
+          <a className="wordmark" href="/">
+            Flight OTA<small>sandbox</small>
+          </a>
+          <a className="nav-edge__link" href="/">
+            ← Start over
+          </a>
+        </header>
+        <main className="checkout-shell">
+          <p className="form-error" role="alert">{loadError}</p>
+        </main>
+      </>
+    );
+  }
+  if (!clientSecret || !hyperPromise) {
+    return (
+      <>
+        <header className="nav-edge">
+          <a className="wordmark" href="/">
+            Flight OTA<small>sandbox</small>
+          </a>
+        </header>
+        <main className="checkout-shell">
+          <p className="checkout-note">Loading checkout…</p>
+        </main>
+      </>
+    );
+  }
 
   return (
-    <HyperElements options={{ clientSecret }} hyper={hyperPromise}>
-      <CheckoutForm bookingId={bookingId} />
-    </HyperElements>
+    <>
+      <header className="nav-edge">
+        <a className="wordmark" href="/">
+          Flight OTA<small>sandbox</small>
+        </a>
+        <a className="nav-edge__link" href="/">
+          ← Start over
+        </a>
+      </header>
+      <main className="checkout-shell">
+        <h1>Complete payment</h1>
+        <div className="checkout-card">
+          <HyperElements options={{ clientSecret }} hyper={hyperPromise}>
+            <CheckoutForm bookingId={bookingId} />
+          </HyperElements>
+        </div>
+      </main>
+    </>
   );
 }

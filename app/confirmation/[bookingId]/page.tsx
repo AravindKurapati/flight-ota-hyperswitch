@@ -27,9 +27,16 @@ export default async function ConfirmationPage({
   const [booking] = await db.select().from(bookings).where(eq(bookings.id, bookingId));
   if (!booking) {
     return (
-      <main style={{ maxWidth: 480, margin: '2rem auto', fontFamily: 'sans-serif' }}>
-        <h1>Booking not found</h1>
-      </main>
+      <>
+        <header className="nav-edge">
+          <a className="wordmark" href="/">
+            Flight OTA<small>sandbox</small>
+          </a>
+        </header>
+        <main className="confirm-shell">
+          <h1>Booking not found</h1>
+        </main>
+      </>
     );
   }
 
@@ -48,24 +55,54 @@ export default async function ConfirmationPage({
   const intent = paymentRow ? await getPayment(paymentRow.hsPaymentId) : null;
 
   const itinerary = findItinerary(booking.itineraryId);
+  const status = intent?.status ?? 'unknown';
+  const statusClass =
+    status === 'succeeded' ? 'ticket-status--settled' : 'ticket-status--pending';
 
   return (
-    <main style={{ maxWidth: 480, margin: '2rem auto', fontFamily: 'sans-serif' }}>
-      <h1>Booking confirmed</h1>
-      <p>
-        PNR: <strong>{booking.pnr}</strong>
-      </p>
-      {itinerary && (
-        <p>
-          {itinerary.carrier} {itinerary.flightNumber} · {itinerary.origin} →{' '}
-          {itinerary.destination}
-        </p>
-      )}
-      <p>Amount held: {formatUsd(booking.amountMinor)}</p>
-      <p>
-        Payment status: <strong>{intent?.status ?? 'unknown'}</strong>
-      </p>
-      <p>Your card is authorized, not charged. It will be captured once your ticket is issued.</p>
-    </main>
+    <>
+      <header className="nav-edge">
+        <a className="wordmark" href="/">
+          Flight OTA<small>sandbox</small>
+        </a>
+        <a className="nav-edge__link" href="/">
+          Book another →
+        </a>
+      </header>
+      <main className="confirm-shell">
+        <h1>Booking confirmed</h1>
+        <div className="ticket-card">
+          <div className="ticket-card__head">
+            <span className="ticket-card__pnr-label">PNR</span>
+            <span className="ticket-card__pnr">{booking.pnr}</span>
+          </div>
+          <dl className="ticket-card__body">
+            {itinerary && (
+              <div className="ticket-row">
+                <dt>Flight</dt>
+                <dd>
+                  {itinerary.carrier} {itinerary.flightNumber} · {itinerary.origin} →{' '}
+                  {itinerary.destination}
+                </dd>
+              </div>
+            )}
+            <div className="ticket-row">
+              <dt>Amount held</dt>
+              <dd>{formatUsd(booking.amountMinor)}</dd>
+            </div>
+            <div className="ticket-row">
+              <dt>Payment status</dt>
+              <dd className={`ticket-status ${statusClass}`}>{status}</dd>
+            </div>
+          </dl>
+          <p className="ticket-card__foot">
+            Your card is authorized, not charged. It will be captured once your ticket is issued.
+          </p>
+        </div>
+      </main>
+      <footer className="foot-line">
+        <p>Hyperswitch hosted sandbox · auth-then-capture · one traveller per booking</p>
+      </footer>
+    </>
   );
 }

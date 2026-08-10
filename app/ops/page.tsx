@@ -74,9 +74,22 @@ export default function OpsPage() {
   }
 
   if (rows === null) {
-    return <main style={{ margin: '2rem', fontFamily: 'sans-serif' }}>
-      {error ? <p role="alert">Failed to load: {error}</p> : <p>Loading…</p>}
-    </main>;
+    return (
+      <>
+        <header className="nav-edge">
+          <a className="wordmark" href="/">
+            Flight OTA<small>sandbox</small>
+          </a>
+        </header>
+        <main className="ops-shell">
+          {error ? (
+            <p className="ops-alert" role="alert">Failed to load: {error}</p>
+          ) : (
+            <p className="checkout-note">Loading…</p>
+          )}
+        </main>
+      </>
+    );
   }
 
   // TICKETING first: funds are held and no ticket exists yet — the single
@@ -85,67 +98,93 @@ export default function OpsPage() {
     Number(b.state === 'TICKETING') - Number(a.state === 'TICKETING'));
 
   return (
-    <main style={{ margin: '2rem', fontFamily: 'sans-serif' }}>
-      <h1>Operations console</h1>
-      <p>
-        Stored vs. live payment state shown side by side; a highlighted row pair has
-        diverged and needs a human look (reconciliation is surfaced, not automated).
-      </p>
-      {error && <p role="alert" style={{ color: '#b00020' }}>{error}</p>}
-      <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-        <thead>
-          <tr>
-            {['PNR', 'Itinerary', 'Amount', 'Booking state', 'Ticket', 'Connector',
-              'hs_payment_id', 'Stored payment', 'Live payment', 'Actions'].map((h) => (
-              <th key={h} style={{ textAlign: 'left', borderBottom: '2px solid #333', padding: '0.4rem' }}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((row) => {
-            const urgent = row.state === 'TICKETING';
-            const cell: React.CSSProperties = { borderBottom: '1px solid #ddd', padding: '0.4rem' };
-            return (
-              <tr key={row.id} style={urgent ? { background: '#fff3cd' } : undefined}>
-                <td style={cell}>{row.pnr}</td>
-                <td style={cell}>{row.itineraryId}</td>
-                <td style={cell}>{formatUsd(row.amountMinor)}</td>
-                <td style={{ ...cell, fontWeight: urgent ? 700 : 400 }}>
-                  {row.state}{urgent ? ' ⚠' : ''}
-                </td>
-                <td style={cell}>{row.ticketNumber ?? '—'}</td>
-                <td style={cell}>{row.connector ?? '—'}</td>
-                <td style={{ ...cell, fontFamily: 'monospace', fontSize: '0.8rem', userSelect: 'all' }}>
-                  {row.hsPaymentId ?? '—'}
-                </td>
-                <td style={{ ...cell, background: row.diverged ? '#f8d7da' : undefined }}>
-                  {row.storedPaymentState ?? '—'}
-                </td>
-                <td style={{ ...cell, background: row.diverged ? '#f8d7da' : undefined, fontWeight: row.diverged ? 700 : 400 }}>
-                  {row.livePaymentState ?? '—'}{row.diverged ? ' ≠' : ''}
-                </td>
-                <td style={cell}>
-                  {(row.state === 'AUTHORIZED' || row.state === 'TICKETING') && (
-                    <button disabled={busy === row.id} onClick={() => void act(row.id, 'issue')}>
-                      Issue ticket
-                    </button>
-                  )}{' '}
-                  {row.state === 'AUTHORIZED' && (
-                    <button disabled={busy === row.id} onClick={() => void act(row.id, 'cancel')}>
-                      Cancel
-                    </button>
-                  )}{' '}
-                  {(row.state === 'TICKETED' || row.state === 'PARTIALLY_REFUNDED') && (
-                    <button disabled={busy === row.id} onClick={() => refund(row)}>
-                      Refund
-                    </button>
-                  )}
-                </td>
+    <>
+      <header className="nav-edge">
+        <a className="wordmark" href="/">
+          Flight OTA<small>sandbox</small>
+        </a>
+        <a className="nav-edge__link" href="/">
+          ← Booking
+        </a>
+      </header>
+      <main className="ops-shell">
+        <h1>Operations console</h1>
+        <p className="ops-shell__lede">
+          Stored vs. live payment state shown side by side; a highlighted row pair has
+          diverged and needs a human look (reconciliation is surfaced, not automated).
+        </p>
+        {error && <p className="ops-alert" role="alert">{error}</p>}
+        <div className="ops-table-wrap">
+          <table className="ops-table">
+            <thead>
+              <tr>
+                {['PNR', 'Itinerary', 'Amount', 'Booking state', 'Ticket', 'Connector',
+                  'hs_payment_id', 'Stored payment', 'Live payment', 'Actions'].map((h) => (
+                  <th key={h}>{h}</th>
+                ))}
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </main>
+            </thead>
+            <tbody>
+              {sorted.map((row) => {
+                const urgent = row.state === 'TICKETING';
+                return (
+                  <tr key={row.id} className={urgent ? 'is-urgent' : undefined}>
+                    <td>{row.pnr}</td>
+                    <td>{row.itineraryId}</td>
+                    <td className="ops-mono">{formatUsd(row.amountMinor)}</td>
+                    <td className="ops-state">
+                      {row.state}{urgent ? ' ⚠' : ''}
+                    </td>
+                    <td>{row.ticketNumber ?? '—'}</td>
+                    <td>{row.connector ?? '—'}</td>
+                    <td className="ops-mono ops-mono--select">{row.hsPaymentId ?? '—'}</td>
+                    <td className={row.diverged ? 'ops-cell--diverged' : undefined}>
+                      {row.storedPaymentState ?? '—'}
+                    </td>
+                    <td className={row.diverged ? 'ops-cell--diverged' : undefined}>
+                      {row.livePaymentState ?? '—'}{row.diverged ? ' ≠' : ''}
+                    </td>
+                    <td>
+                      <div className="ops-actions">
+                        {(row.state === 'AUTHORIZED' || row.state === 'TICKETING') && (
+                          <button
+                            className="btn btn-sm"
+                            disabled={busy === row.id}
+                            onClick={() => void act(row.id, 'issue')}
+                          >
+                            Issue ticket
+                          </button>
+                        )}
+                        {row.state === 'AUTHORIZED' && (
+                          <button
+                            className="btn btn-sm btn-ghost"
+                            disabled={busy === row.id}
+                            onClick={() => void act(row.id, 'cancel')}
+                          >
+                            Cancel
+                          </button>
+                        )}
+                        {(row.state === 'TICKETED' || row.state === 'PARTIALLY_REFUNDED') && (
+                          <button
+                            className="btn btn-sm btn-ghost"
+                            disabled={busy === row.id}
+                            onClick={() => refund(row)}
+                          >
+                            Refund
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </main>
+      <footer className="foot-line">
+        <p>NO AUTHENTICATION — internal demo tool, not for production use</p>
+      </footer>
+    </>
   );
 }
